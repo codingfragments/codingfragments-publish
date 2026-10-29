@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import type { NamingConfig } from "../core/config.ts";
 import * as manifestIo from "../core/manifest.ts";
 import type { ProgressEvent } from "../core/progress.ts";
 import { buildPlan, publish } from "../core/publish.ts";
@@ -43,6 +44,7 @@ async function run(
     rateLimitOn?: string;
     failNames?: string[];
     failFileIds?: string[];
+    naming?: NamingConfig;
   } = {},
 ) {
   const drive = opts.drive ?? new FakeDrive();
@@ -50,7 +52,7 @@ async function run(
   if (opts.rateLimitOn) drive.rateLimitOn = opts.rateLimitOn;
   if (opts.failNames) for (const n of opts.failNames) drive.failNames.add(n);
   if (opts.failFileIds) for (const id of opts.failFileIds) drive.failFileIds.add(id);
-  const plan = buildPlan({ root, manifest });
+  const plan = buildPlan({ root, manifest, ...(opts.naming ? { naming: opts.naming } : {}) });
   const summary = await publish({
     root,
     drive,
@@ -58,6 +60,7 @@ async function run(
     plan,
     prune: opts.prune ?? false,
     repair: opts.repair ?? false,
+    ...(opts.naming ? { naming: opts.naming } : {}),
     // 1 pins the historical sequential order so existing call-sequence
     // assertions stay deterministic; parallel behaviour has its own tests.
     concurrency: opts.concurrency ?? 1,
@@ -837,4 +840,112 @@ test("a previously published file that falls under a pattern becomes an orphan",
   assert.equal(summary.pruned, 1, "the orphan left Drive via the explicit prune");
   assert.ok(!manifest.entries["_drafts/old.md"], "and its manifest entry is gone");
   assert.ok(drive.files.get("docOLD")?.trashed, "trashed, never hard-deleted");
+});
+
+// ---------------------------------------------------------------------------
+// configurable naming (naming in .gdrive-publish.json)
+// ---------------------------------------------------------------------------
+
+test("a changed name renames the Doc in place - fileId and URL stay stable", async () => {
+  const root = fixture({ "a.md": "# A\n" });
+  const manifest = freshManifest();
+  const first = await run(root, manifest);
+  const id = manifest.entries["a.md"]?.fileId as string;
+
+  fs.writeFileSync(path.join(root, "a.md"), "# B\n");
+  const second = await run(root, manifest, { drive: first.drive });
+
+  assert.equal(manifest.entries["a.md"]?.fileId, id, "fileId must not change");
+  assert.ok(second.drive.calls.includes(`rename(${id},B)`), "rename must be issued");
+  assert.equal(first.drive.files.get(id)?.name, "B");
+  assert.equal(manifest.entries["a.md"]?.name, "B");
+  assert.equal(second.summary.updated, 1);
+});
+
+test("filename strategy with strip and titleCase names Docs from the slug", async () => {
+  const root = fixture({
+    "author/olzhas-nurpeisov-59f99572.md": "# Olzhas Nurpeisov - Contribution Analysis\n",
+  });
+  const manifest = freshManifest();
+  const { drive } = await run(root, manifest, {
+    naming: { strategy: "filename", strip: ["-[0-9a-f]{8}$"], titleCase: true },
+  });
+  const id = manifest.entries["author/olzhas-nurpeisov-59f99572.md"]?.fileId as string;
+  assert.equal(drive.files.get(id)?.name, "Olzhas Nurpeisov");
+  assert.equal(manifest.entries["author/olzhas-nurpeisov-59f99572.md"]?.name, "Olzhas Nurpeisov");
+});
+
+test("per-path override: slug naming for author files, H1 elsewhere", async () => {
+  const root = fixture({
+    "author/someone-abcdef01.md": "# Someone - Deep Dive\n",
+    "readme.md": "# The README\n",
+  });
+  const manifest = freshManifest();
+  await run(root, manifest, {
+    naming: {
+      strategy: "heading",
+      overrides: [{ pattern: "author/*.md", strategy: "filename" }],
+    },
+  });
+  assert.equal(
+    manifest.entries["author/someone-abcdef01.md"]?.name,
+    "someone abcdef01",
+    "override must win for author files",
+  );
+  assert.equal(manifest.entries["readme.md"]?.name, "The README", "global rule elsewhere");
+});
+
+test("switching strategy later renames the existing Docs, never recreates them", async () => {
+  const root = fixture({ "a.md": "# A\n" });
+  const manifest = freshManifest();
+  const first = await run(root, manifest); // name from the H1
+  const id = manifest.entries["a.md"]?.fileId as string;
+  assert.equal(manifest.entries["a.md"]?.name, "A");
+
+  // Content unchanged; only the naming rule changes.
+  const second = await run(root, manifest, {
+    drive: first.drive,
+    naming: { strategy: "filename" },
+  });
+  assert.equal(manifest.entries["a.md"]?.fileId, id, "same Doc, renamed in place");
+  assert.ok(second.drive.calls.includes(`rename(${id},a)`), "rename to the stem name");
+  assert.equal(second.drive.files.get(id)?.name, "a");
+  assert.equal(second.summary.updated, 1);
+  assert.equal(
+    second.drive.calls.filter((c) => c.startsWith("createEmptyDoc")).length,
+    1,
+    "still exactly one Doc was ever created",
+  );
+});
+
+test("a strategy whose source is missing publishes under the fallback with a warn", async () => {
+  const root = fixture({ "plain.md": "no heading, no front matter\n" });
+  const manifest = freshManifest();
+  const { plan, summary } = await run(root, manifest, { naming: { strategy: "heading" } });
+  assert.ok(
+    plan.diagnostics.some(
+      (d) =>
+        d.code === "NAMING_FALLBACK" &&
+        d.relPath === "plain.md" &&
+        /found no usable heading/.test(d.message),
+    ),
+  );
+  assert.equal(manifest.entries["plain.md"]?.name, "plain", "stem fallback");
+  assert.equal(summary.created, 1, "the fallback still publishes");
+});
+
+test("front matter is still stripped under any strategy, with honest wording", async () => {
+  const root = fixture({
+    "a.md": ["---", "title: The Title", "---", "# A"].join("\n"),
+  });
+  const manifest = freshManifest();
+  const withStrategy = await run(root, manifest, { naming: { strategy: "heading" } });
+  assert.ok(
+    withStrategy.plan.diagnostics.some(
+      (d) =>
+        d.code === "FRONTMATTER_STRIPPED" &&
+        /title "The Title" not used as the Doc name/.test(d.message),
+    ),
+  );
+  assert.equal(manifest.entries["a.md"]?.name, "A");
 });

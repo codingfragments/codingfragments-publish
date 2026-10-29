@@ -124,7 +124,7 @@ gdrive-publish browse docs/report.csv --json  # { url, fileId, kind, relPath }
 | German Excel CSV (semicolon, latin-1) | normalised to UTF-8 comma CSV first, so columns split correctly |
 | `book.xlsx` | a native Sheet (macros and some formatting are lost — warned) |
 | `![diagram](./img/diagram.png)` | the image embedded inside the Doc; an image no markdown references warns `IMAGE_UNREFERENCED` (claim it via `rawPatterns` to upload it as a raw file, reference it, or delete it) |
-| YAML front matter | stripped (Drive would mangle it); `title:` becomes the Doc name |
+| YAML front matter | stripped (Drive would mangle it); `title:` becomes the Doc name (unless a `naming` strategy says otherwise — see below) |
 | files Drive cannot host (`.txt`, …) | skipped, with a warning |
 
 ## Raw uploads (opt-in)
@@ -160,6 +160,48 @@ entries are never removed), prints the file contents and the resulting
 plan, and asks you to verify the patterns before the next `plan` or
 `publish`. Files without an extension (e.g. `Makefile`) cannot be covered
 automatically and are listed for manual patterns.
+
+## Document naming (opt-in)
+
+By default a markdown Doc gets the name of its front-matter `title:`, else
+its first `# Heading`, else the filename stem. The `naming` section of
+`.gdrive-publish.json` changes that:
+
+```json
+{
+  "naming": {
+    "strategy": "filename",
+    "titleCase": true,
+    "strip": ["-[0-9a-f]{8}$"],
+    "overrides": [
+      { "pattern": "author/*.md", "strategy": "heading" }
+    ]
+  }
+}
+```
+
+- `strategy` — where the name comes from:
+  - `"auto"` (default): front-matter title → first H1 → filename stem
+  - `"frontmatter"`: the front-matter `title:`
+  - `"heading"`: the first H1
+  - `"filename"`: the filename stem
+- `strip` — regular expressions removed from the chosen name, applied in
+  order. For the `filename` strategy they run against the raw slug
+  (`olzhas-nurpeisov-59f99572`) before `-`/`_` become spaces
+- `titleCase` — capitalise each lowercase word (`olzhas nurpeisov` →
+  `Olzhas Nurpeisov`); words that already contain capitals (`SQL`, `iOS`)
+  stay untouched
+- `overrides` — per-path rules; the first matching `pattern` wins (gitignore-
+  style globs, like `rawPatterns`). An override sets its own `strategy` and
+  may set `strip`/`titleCase`; fields it leaves out inherit the global ones
+
+A strategy whose source is missing (or stripped to nothing) publishes under
+the next source and warns `NAMING_FALLBACK`. Only markdown Docs follow
+`naming` — CSV/XLSX Sheets and raw uploads keep their filename.
+
+Because identity is the manifest fileId, a later naming change — or an
+edited H1 — **renames the existing Doc in place**: file ids and shared URLs
+stay stable.
 
 ## The manifest
 

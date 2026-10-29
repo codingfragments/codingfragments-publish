@@ -137,6 +137,47 @@ test("unknown keys still name every supported key", () => {
   fs.writeFileSync(path.join(root, ".gdrive-publish.json"), JSON.stringify({ whatever: 1 }));
   assert.throws(
     () => loadConfig(root),
-    /only rawPatterns, ignorePatterns and concurrency are supported/,
+    /only rawPatterns, ignorePatterns, concurrency and naming are supported/,
   );
+});
+
+test("naming: accepted in the config file, round-trips through saveConfig", () => {
+  saveConfig(root, {
+    rawPatterns: [],
+    naming: {
+      strategy: "filename",
+      titleCase: true,
+      strip: ["-[0-9a-f]{8}$"],
+      overrides: [{ pattern: "author/*.md", strategy: "heading", strip: [] }],
+    },
+  });
+  const naming = loadConfig(root)?.naming;
+  assert.equal(naming?.strategy, "filename");
+  assert.equal(naming?.titleCase, true);
+  assert.deepEqual(naming?.strip, ["-[0-9a-f]{8}$"]);
+  assert.deepEqual(naming?.overrides, [{ pattern: "author/*.md", strategy: "heading", strip: [] }]);
+});
+
+test("naming: invalid values are hard errors naming the exact field", () => {
+  const cases: Array<[unknown, RegExp]> = [
+    [
+      { strategy: "bogus" },
+      /strategy" must be one of "auto", "frontmatter", "heading", "filename"/,
+    ],
+    [{ titleCase: "yes" }, /titleCase" must be a boolean/],
+    [{ strip: ["("] }, /invalid regular expression "\("/],
+    [{ strip: "nope" }, /strip must be an array of strings/],
+    [{ extra: 1 }, /naming: unknown key "extra"/],
+    [{ overrides: "nope" }, /overrides must be an array of objects/],
+    [
+      { overrides: [{ strategy: "heading" }] },
+      /overrides\[0\]: "pattern" must be a non-empty string/,
+    ],
+    [{ overrides: [{ pattern: "*.md" }] }, /overrides\[0\]: "strategy" must be one of/],
+    [{ overrides: [{ pattern: "*.md", bogus: 1 }] }, /overrides\[0\]: unknown key "bogus"/],
+  ];
+  for (const [naming, pattern] of cases) {
+    fs.writeFileSync(path.join(root, ".gdrive-publish.json"), JSON.stringify({ naming }));
+    assert.throws(() => loadConfig(root), pattern, `expected error for ${JSON.stringify(naming)}`);
+  }
 });

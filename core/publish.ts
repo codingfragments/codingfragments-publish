@@ -14,13 +14,15 @@
  */
 
 import fs from "node:fs";
-import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, derivePatterns } from "./config.ts";
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, derivePatterns, loadConfig } from "./config.ts";
+import type { NamingConfig, NamingRule } from "./config.ts";
 import { describeDialect, normaliseCsv } from "./csv.ts";
 import type { DriveClient } from "./drive.ts";
 import { DriveError } from "./drive.ts";
 import { classifyTarget, collectLinks } from "./links.ts";
 import * as manifestIo from "./manifest.ts";
-import { documentName, tabularName } from "./naming.ts";
+import { resolveDocumentName, resolveRule, tabularName } from "./naming.ts";
+import type { NameSource } from "./naming.ts";
 import { AdaptivePool } from "./pool.ts";
 import { prepareMarkdown } from "./prepare.ts";
 import { resolveRelative } from "./prepare.ts";
@@ -56,17 +58,31 @@ function referencedImages(root: string, files: SourceFile[]): Set<string> {
 export interface PlanOptions {
   root: string;
   manifest: Manifest | null;
+  /** Naming rules; defaults to the `naming` section of .gdrive-publish.json. */
+  naming?: NamingConfig;
 }
 
-function nameFor(file: SourceFile): string {
+interface PlanName {
+  name: string;
+  /** Which configured source was unavailable, for a NAMING_FALLBACK warn. */
+  missing?: NameSource;
+  /** Which source actually produced the name. */
+  source?: NameSource;
+}
+
+function nameFor(file: SourceFile, rule: NamingRule): PlanName {
   if (file.kind === "markdown") {
-    return documentName(file.relPath, fs.readFileSync(file.absPath, "utf8"));
+    const resolved = resolveDocumentName(file.relPath, fs.readFileSync(file.absPath, "utf8"), rule);
+    return {
+      name: resolved.name,
+      ...(resolved.missing ? { missing: resolved.missing, source: resolved.source } : {}),
+    };
   }
   if (file.kind === "file") {
     // Raw uploads keep the full filename - the extension carries meaning.
-    return file.relPath.split("/").pop() as string;
+    return { name: file.relPath.split("/").pop() as string };
   }
-  return tabularName(file.relPath);
+  return { name: tabularName(file.relPath) };
 }
 
 function hashFor(file: SourceFile): string {
@@ -77,6 +93,7 @@ function hashFor(file: SourceFile): string {
 export function buildPlan(opts: PlanOptions): Plan {
   const { files, skipped } = scan(opts.root);
   const referenced = referencedImages(opts.root, files);
+  const naming = opts.naming ?? loadConfig(opts.root)?.naming;
 
   // What a `plan --suggest-config` run could automate: patterns derived
   // from the extensions of the files that remain unsupported.
@@ -122,7 +139,16 @@ export function buildPlan(opts: PlanOptions): Plan {
     const folder = file.relPath.includes("/")
       ? file.relPath.slice(0, file.relPath.lastIndexOf("/"))
       : "";
-    const name = nameFor(file);
+    const rule = resolveRule(file.relPath, naming);
+    const { name, missing, source } = nameFor(file, rule);
+    if (missing) {
+      diagnostics.push({
+        code: "NAMING_FALLBACK",
+        severity: "warn",
+        relPath: file.relPath,
+        message: `naming strategy "${rule.strategy}" found no usable ${missing} (absent or stripped to nothing); publishing under the ${source} name instead`,
+      });
+    }
     if (!existing) {
       items.push({ relPath: file.relPath, kind: file.kind, action: "create", name, folder });
       continue;
@@ -191,6 +217,7 @@ export function buildPlan(opts: PlanOptions): Plan {
         root: opts.root,
         known,
         analyzeOnly: true,
+        naming,
       });
       diagnostics.push(...analysis.diagnostics);
     } catch (e) {
@@ -233,6 +260,8 @@ export interface PublishOptions {
   manifest: Manifest;
   plan: Plan;
   prune: boolean;
+  /** Naming rules; defaults to the `naming` section of .gdrive-publish.json. */
+  naming?: NamingConfig;
   /** Recreate files whose Drive copy is gone (old shared URLs die). */
   repair?: boolean;
   /**
@@ -259,6 +288,7 @@ export interface PublishOptions {
 export async function publish(opts: PublishOptions): Promise<PublishSummary> {
   const { root, drive, manifest, plan } = opts;
   const now = opts.now ?? (() => new Date());
+  const naming = opts.naming ?? loadConfig(root)?.naming;
   // Bounded parallelism with adaptive throttling: the Drive client reports
   // rate limits, the pool halves, surplus workers stop pulling. Folders and
   // the phase-1/2 barrier stay sequential (design: docs/parallel-publish.md).
@@ -508,6 +538,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
           const mime = rawMimeType(item.relPath);
           await drive.updateMedia(fileId, mime, buf);
           const entry = manifest.entries[item.relPath];
+          if (entry && entry.name !== item.name) await drive.rename(fileId, item.name);
           if (entry) {
             entry.name = item.name;
             entry.contentHash = manifestIo.contentHash(buf);
@@ -526,6 +557,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
           if (note) diagnostics.push(note);
           await drive.updateMedia(fileId, mediaMime, media);
           const entry = manifest.entries[item.relPath];
+          if (entry && entry.name !== item.name) await drive.rename(fileId, item.name);
           if (entry) {
             entry.name = item.name;
             entry.contentHash = manifestIo.contentHash(fs.readFileSync(`${root}/${item.relPath}`));
@@ -571,6 +603,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
       resolved,
       root,
       known,
+      naming,
     });
     diagnostics.push(...prepared.diagnostics);
     if (prepared.diagnostics.some((d) => d.severity === "error")) {
@@ -579,6 +612,12 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
     }
     try {
       await drive.updateMedia(fileId, "text/markdown", prepared.content);
+      // A name change renames in place: updateMedia patches content only,
+      // never the Drive-side name (naming config change, edited H1).
+      const current = manifest.entries[item.relPath];
+      if (current && current.name !== item.name) {
+        await drive.rename(fileId, item.name);
+      }
     } catch (e) {
       // A failed fill leaves the entry exactly as checkpointed: a `pending`
       // shell (create) or an update whose hash never advanced, so the next

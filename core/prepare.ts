@@ -11,8 +11,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { NamingConfig } from "./config.ts";
 import { classifyTarget, rewriteLinks } from "./links.ts";
-import { splitFrontMatter } from "./naming.ts";
+import { resolveRule, splitFrontMatter } from "./naming.ts";
 import { imageMimeType } from "./scan.ts";
 import type { Diagnostic, FileKind } from "./types.ts";
 
@@ -43,6 +44,12 @@ export interface PrepareInput {
    * the returned `content` must not be uploaded.
    */
   analyzeOnly?: boolean;
+  /**
+   * Naming rules for this document's Doc name (strategy, transforms,
+   * per-path overrides). Only affects diagnostics wording - which source
+   * the Doc name comes from - never the prepared content.
+   */
+  naming?: NamingConfig;
 }
 
 export interface PrepareResult {
@@ -84,12 +91,18 @@ export function prepareMarkdown(input: PrepareInput): PrepareResult {
   const diagnostics: Diagnostic[] = [];
   const fm = splitFrontMatter(input.markdown);
   if (fm.present) {
+    // The wording must match what the naming config actually does: under a
+    // heading/filename strategy the front-matter title no longer feeds the name.
+    const strategy = resolveRule(input.relPath, input.naming).strategy;
+    const titleFeedsName = strategy === "auto" || strategy === "frontmatter";
     diagnostics.push({
       code: "FRONTMATTER_STRIPPED",
       severity: "warn",
       relPath: input.relPath,
       message: fm.fields.title
-        ? `front matter removed (Drive would mangle it); title "${fm.fields.title}" used as the Doc name`
+        ? titleFeedsName
+          ? `front matter removed (Drive would mangle it); title "${fm.fields.title}" used as the Doc name`
+          : `front matter removed (Drive would mangle it); title "${fm.fields.title}" not used as the Doc name (naming strategy "${strategy}")`
         : "front matter removed (the Drive importer turns it into a mangled heading)",
     });
   }
