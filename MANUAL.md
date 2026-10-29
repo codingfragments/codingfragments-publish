@@ -180,10 +180,12 @@ its first `# Heading`, else the filename stem. The `naming` section of
 }
 ```
 
-- `strategy` — where the name comes from:
+- `strategy` — where the name comes from, and where it falls back to. You
+  always get a chain; the strategy only picks where it starts (a freely
+  configurable order — filename before H1, say — is not supported):
   - `"auto"` (default): front-matter title → first H1 → filename stem
-  - `"frontmatter"`: the front-matter `title:`
-  - `"heading"`: the first H1
+  - `"frontmatter"`: front-matter `title:` → first H1 → filename stem
+  - `"heading"`: first H1 → filename stem
   - `"filename"`: the filename stem
 - `strip` — regular expressions removed from the chosen name, applied in
   order. For the `filename` strategy they run against the raw slug
@@ -195,9 +197,19 @@ its first `# Heading`, else the filename stem. The `naming` section of
   style globs, like `rawPatterns`). An override sets its own `strategy` and
   may set `strip`/`titleCase`; fields it leaves out inherit the global ones
 
-A strategy whose source is missing (or stripped to nothing) publishes under
-the next source and warns `NAMING_FALLBACK`. Only markdown Docs follow
-`naming` — CSV/XLSX Sheets and raw uploads keep their filename.
+A strategy whose source is missing (or stripped to nothing) walks the rest
+of its chain and warns `NAMING_FALLBACK` naming the skipped source. So
+`"heading"` already means *H1 where there is one, filename stem otherwise*:
+
+| Strategy | Chain | `NAMING_FALLBACK` warn when |
+|---|---|---|
+| `auto` | title → H1 → stem | never — the chain itself is the behaviour |
+| `frontmatter` | title → H1 → stem | no `title:` in the file |
+| `heading` | H1 → stem | no H1 in the file |
+| `filename` | stem → raw stem | `strip` empties the stem |
+
+Only markdown Docs follow `naming` — CSV/XLSX Sheets and raw uploads keep
+their filename.
 
 Because identity is the manifest fileId, a later naming change — or an
 edited H1 — **renames the existing Doc in place**: file ids and shared URLs
