@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 is required: source and tests are plain TypeScript and
+          # run through Node's native type stripping (22.6+), no build step.
+          node-version: 24
+      - run: npm install --ignore-scripts
+      - run: npm run lint
+      - run: npm run typecheck
+      # Offline suite only: no credentials, no network. The live Drive tier is
+      # opt-in via GDRIVE_PUBLISH_E2E=1 and deliberately never runs in CI.
+      - run: npm test

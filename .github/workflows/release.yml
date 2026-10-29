@@ -1,0 +1,52 @@
+name: release
+
+# Publishes the npm package on tag push. Tag convention: v<version> (single
+# product repo, no prefix needed). The version in package.json and the
+# commands.ts VERSION constant must match the tag - a test enforces the first
+# half; this workflow checks the tag.
+#
+# Authentication uses npm Trusted Publishing (OIDC): no token secret. The
+# trusted publisher must be registered on npmjs.com for this package
+# (package -> Settings -> Trusted publishing) with:
+#   repository: codingfragments/codingfragments-publish
+#   workflow:   release.yml
+#   environment: (none - do not set one here)
+#
+# NOTE: registration must be re-pointed to THIS repository before the first
+# release here (the package previously published from codingfragments/
+# pi-extensions via its own trusted-publisher entry - remove that one).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  # Required for npm Trusted Publishing (OIDC): lets the job prove its
+  # identity to the npm registry without any stored token.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install --ignore-scripts
+      # Full offline suite must pass before anything is published.
+      - run: npm test
+      # Compile the dist/ artifact that the published tarball ships.
+      - run: npm run build
+      - name: Check tag matches package version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+      - run: npm publish

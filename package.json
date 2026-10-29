@@ -1,0 +1,62 @@
+{
+  "name": "gdrive-publish",
+  "version": "0.10.0",
+  "description": "Publish markdown, CSV and Excel files to Google Drive as native Google Docs and Sheets, rewriting relative links to real Doc URLs with stable sharing links",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "gdrive-publish": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist/",
+    "core/",
+    "cli.ts",
+    "commands.ts",
+    "index.ts",
+    "generate-docs.ts",
+    "README.md",
+    "MANUAL.md",
+    "skills/"
+  ],
+  "keywords": [
+    "google-drive",
+    "google-docs",
+    "google-sheets",
+    "markdown",
+    "publish",
+    "cli",
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codingfragments/codingfragments-publish.git"
+  },
+  "homepage": "https://github.com/codingfragments/codingfragments-publish",
+  "bugs": {
+    "url": "https://github.com/codingfragments/codingfragments-publish/issues"
+  },
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "biome check .",
+    "docs:cli": "node generate-docs.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
