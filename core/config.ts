@@ -18,6 +18,38 @@ import path from "node:path";
 
 export const CONFIG_FILENAME = ".gdrive-publish.json";
 
+/** How the Drive Doc name is derived for a markdown file. */
+export type NamingStrategy = "auto" | "frontmatter" | "heading" | "filename";
+export const NAMING_STRATEGIES: readonly NamingStrategy[] = [
+  "auto",
+  "frontmatter",
+  "heading",
+  "filename",
+];
+
+/** One naming rule: a source plus optional post-processing. */
+export interface NamingRule {
+  strategy: NamingStrategy;
+  /** Capitalise each lowercase word ("olzhas nurpeisov" -> "Olzhas Nurpeisov"); words that already contain capitals ("SQL", "iOS") stay untouched. */
+  titleCase?: boolean;
+  /** Regular expressions removed from the chosen name, applied in order. */
+  strip?: string[];
+}
+
+/** A naming rule scoped to paths matching a gitignore-style glob. */
+export interface NamingOverride extends NamingRule {
+  pattern: string;
+}
+
+/** Top-level `naming` config object. Defaults reproduce the historical behaviour. */
+export interface NamingConfig {
+  strategy?: NamingStrategy;
+  titleCase?: boolean;
+  strip?: string[];
+  /** First matching override wins; unmatched paths use the global settings. */
+  overrides?: NamingOverride[];
+}
+
 export interface PublishConfig {
   rawPatterns: string[];
   /**
@@ -30,6 +62,12 @@ export interface PublishConfig {
    * caller's default; the CLI resolves flag > env > this file > 3.
    */
   concurrency?: number;
+  /**
+   * Drive naming rules for markdown documents (strategy, transforms,
+   * per-path overrides). Absent = the historical behaviour: front-matter
+   * title -> first H1 -> filename stem.
+   */
+  naming?: NamingConfig;
 }
 
 /** Default concurrency: mid-band of Google's documented 2–5 recommendation. */
@@ -106,9 +144,14 @@ export function loadConfig(root: string): PublishConfig | null {
   }
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (key !== "rawPatterns" && key !== "ignorePatterns" && key !== "concurrency") {
+    if (
+      key !== "rawPatterns" &&
+      key !== "ignorePatterns" &&
+      key !== "concurrency" &&
+      key !== "naming"
+    ) {
       throw new Error(
-        `${CONFIG_FILENAME}: unknown key "${key}" (only rawPatterns, ignorePatterns and concurrency are supported)`,
+        `${CONFIG_FILENAME}: unknown key "${key}" (only rawPatterns, ignorePatterns, concurrency and naming are supported)`,
       );
     }
   }
@@ -137,11 +180,113 @@ export function loadConfig(root: string): PublishConfig | null {
   ) {
     throw new Error(`${CONFIG_FILENAME}: ignorePatterns must be an array of strings`);
   }
+  const naming = obj.naming === undefined ? undefined : validateNaming(obj.naming);
   return {
     rawPatterns: (patterns as string[] | undefined) ?? [],
     ...(ignore !== undefined ? { ignorePatterns: ignore as string[] } : {}),
     ...(concurrency !== undefined ? { concurrency: concurrency as number } : {}),
+    ...(naming !== undefined ? { naming } : {}),
   };
+}
+
+/** Validate a strip-regex list: every entry must compile. Returns it typed. */
+function validateStripList(value: unknown, where: string): string[] {
+  if (!Array.isArray(value) || !value.every((x) => typeof x === "string")) {
+    throw new Error(
+      `${CONFIG_FILENAME}: ${where} must be an array of strings (regular expressions)`,
+    );
+  }
+  for (const pattern of value as string[]) {
+    try {
+      new RegExp(pattern);
+    } catch (e) {
+      throw new Error(
+        `${CONFIG_FILENAME}: ${where} contains an invalid regular expression "${pattern}": ${String(
+          e instanceof Error ? e.message : e,
+        ).slice(0, 120)}`,
+      );
+    }
+  }
+  return value as string[];
+}
+
+/** Validate a naming rule's shared fields (strategy, titleCase, strip). */
+function validateRuleFields(
+  value: Record<string, unknown>,
+  where: string,
+  requireStrategy: boolean,
+  allowPattern: boolean,
+): Partial<NamingRule> {
+  const allowedKeys = allowPattern
+    ? ["strategy", "titleCase", "strip", "pattern"]
+    : ["strategy", "titleCase", "strip"];
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.includes(key)) {
+      throw new Error(
+        `${CONFIG_FILENAME}: ${where}: unknown key "${key}" (only ${allowedKeys.join(", ")} ${
+          allowPattern ? "and pattern " : ""
+        }are supported)`,
+      );
+    }
+  }
+  let strategy: NamingStrategy | undefined;
+  if (value.strategy !== undefined || requireStrategy) {
+    if (
+      typeof value.strategy !== "string" ||
+      !NAMING_STRATEGIES.includes(value.strategy as NamingStrategy)
+    ) {
+      throw new Error(
+        `${CONFIG_FILENAME}: ${where}: "strategy" must be one of ${NAMING_STRATEGIES.map((s) => `"${s}"`).join(", ")}`,
+      );
+    }
+    strategy = value.strategy as NamingStrategy;
+  }
+  if (value.titleCase !== undefined && typeof value.titleCase !== "boolean") {
+    throw new Error(`${CONFIG_FILENAME}: ${where}: "titleCase" must be a boolean`);
+  }
+  const strip =
+    value.strip === undefined ? undefined : validateStripList(value.strip, `${where}.strip`);
+  return {
+    ...(strategy !== undefined ? { strategy } : {}),
+    ...(value.titleCase !== undefined ? { titleCase: value.titleCase as boolean } : {}),
+    ...(strip !== undefined ? { strip } : {}),
+  };
+}
+
+/** Strict parse of the `naming` config object. Invalid content is a hard error. */
+function validateNaming(value: unknown): NamingConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${CONFIG_FILENAME}: "naming" must be an object`);
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key !== "strategy" && key !== "titleCase" && key !== "strip" && key !== "overrides") {
+      throw new Error(
+        `${CONFIG_FILENAME}: naming: unknown key "${key}" (only strategy, titleCase, strip and overrides are supported)`,
+      );
+    }
+  }
+  const { overrides, ...shared } = obj;
+  const global = validateRuleFields(shared, "naming", false, false) as NamingConfig;
+  if (overrides !== undefined) {
+    if (!Array.isArray(overrides)) {
+      throw new Error(`${CONFIG_FILENAME}: naming.overrides must be an array of objects`);
+    }
+    global.overrides = overrides.map((entry, i) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new Error(`${CONFIG_FILENAME}: naming.overrides[${i}] must be an object`);
+      }
+      const o = entry as Record<string, unknown>;
+      if (typeof o.pattern !== "string" || o.pattern === "") {
+        throw new Error(
+          `${CONFIG_FILENAME}: naming.overrides[${i}]: "pattern" must be a non-empty string`,
+        );
+      }
+      const rule = validateRuleFields(o, `naming.overrides[${i}]`, true, true);
+      return { pattern: o.pattern, ...rule } as NamingOverride;
+    });
+  }
+  return global;
 }
 
 /** Atomic write (temp file + rename, same discipline as the manifest). */

@@ -33,7 +33,8 @@ export type DiagnosticCode =
   | "PUBLISH_FAILED"
   | "ORPHAN"
   | "UNSUPPORTED_FILE"
-  | "PENDING_RESUMED";
+  | "PENDING_RESUMED"
+  | "NAMING_FALLBACK";
 
 export type Severity = "warn" | "error";
 
@@ -61,7 +62,7 @@ export interface PlanItem {
   relPath: string;
   kind: FileKind;
   action: PlanAction;
-  /** Target name in Drive (front-matter title -> first H1 -> filename stem). */
+  /** Target name in Drive (naming config; default front-matter title -> first H1 -> filename stem). */
   name: string;
   /** Existing Drive fileId when the manifest already knows this file. */
   fileId?: string;

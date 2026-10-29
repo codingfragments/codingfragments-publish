@@ -47,7 +47,8 @@ Warnings are normal, not failures. The ones that matter to a user:
 | `ANCHOR_DROPPED` | The link works but lands at the top of the Doc, not the section. Google Docs headings have no stable anchors we can target yet. |
 | `LINK_OUTSIDE_ROOT` | The link points outside the published folder, so it was left as-is and will be broken in Drive. Either move the file into the folder or change the link. |
 | `LINK_TARGET_MISSING` | Broken link in the source, left verbatim. Worth fixing locally. |
-| `FRONTMATTER_STRIPPED` | Expected. Drive mangles YAML front matter, so it is removed; `title:` became the Doc name. |
+| `FRONTMATTER_STRIPPED` | Expected. Drive mangles YAML front matter, so it is removed; `title:` became the Doc name (under a heading/filename `naming` strategy the message says the title was *not* used - equally expected). |
+| `NAMING_FALLBACK` | The configured `naming` strategy found its source missing (no front-matter title, no H1, or `strip` emptied it); the Doc published under the fallback name named in the warning. Harmless unless the user expected that source to exist - point them at the file or the `naming` config. |
 | `IMAGE_UNREFERENCED` | The image is not referenced by any markdown, so it publishes nowhere. Tell the user their options: reference it, claim it via rawPatterns (uploads it as a raw file), or delete it. |
 | `IMAGE_LARGE` | Images are embedded as base64, which inflates the upload by ~33%. Consider shrinking it. |
 | `DOC_PAYLOAD_TOO_LARGE` | An **error**, not a warning: the document will be skipped until images shrink. |
