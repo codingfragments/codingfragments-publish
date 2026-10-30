@@ -148,7 +148,9 @@ export function buildPlan(opts: PlanOptions): Plan {
           severity: "warn",
           relPath: file.relPath,
           message:
-            "not published: reference it in markdown, claim it via rawPatterns, or delete it",
+            treeMode.mode === "native"
+              ? "not published: native mode leaves image links as-is and never uploads image files; claim it via rawPatterns, or delete it"
+              : "not published: reference it in markdown, claim it via rawPatterns, or delete it",
         });
       }
       continue;
@@ -176,7 +178,7 @@ export function buildPlan(opts: PlanOptions): Plan {
         code: "PENDING_RESUMED",
         severity: "warn",
         relPath: file.relPath,
-        message: `previous run left this Doc empty; filling it in place (${existing.fileId})`,
+        message: `previous run left this file empty; filling it in place (${existing.fileId})`,
       });
       items.push({
         relPath: file.relPath,
@@ -219,7 +221,11 @@ export function buildPlan(opts: PlanOptions): Plan {
   const placeholder = new Map<string, ResolvedTarget>();
   for (const item of items) {
     const id = item.fileId ?? `PLANNED-${item.relPath}`;
-    placeholder.set(item.relPath, { fileId: id, url: driveUrl(item.kind, id), kind: item.kind });
+    placeholder.set(item.relPath, {
+      fileId: id,
+      url: driveUrl(item.kind, id, treeMode.mode),
+      kind: item.kind,
+    });
   }
   // "known" means "exists on disk", which must include unsupported files:
   // otherwise a link to notes.txt is misreported as a broken link instead of
@@ -236,6 +242,7 @@ export function buildPlan(opts: PlanOptions): Plan {
         known,
         analyzeOnly: true,
         naming,
+        mode: treeMode.mode,
       });
       diagnostics.push(...analysis.diagnostics);
     } catch (e) {
@@ -412,12 +419,18 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
           return;
         }
         if (item.kind === "markdown") {
-          const shell = await drive.createEmptyDoc(item.name, parentId);
+          // Doc mode reserves Google Doc shells; native mode reserves raw
+          // text/markdown shells - both filled in phase 2 via updateMedia,
+          // both resumable identically (PENDING_RESUMED).
+          const shell =
+            treeMode.mode === "native"
+              ? await drive.createEmptyFile(item.name, "text/markdown", parentId)
+              : await drive.createEmptyDoc(item.name, parentId);
           manifest.entries[item.relPath] = {
             fileId: shell.id,
             kind: item.kind,
             name: item.name,
-            url: driveUrl(item.kind, shell.id),
+            url: driveUrl(item.kind, shell.id, treeMode.mode),
             contentHash: "",
             publishedAt: now().toISOString(),
             pending: true,
@@ -426,11 +439,15 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
           toFill.push({ item, fileId: shell.id });
           resolved.set(item.relPath, {
             fileId: shell.id,
-            url: driveUrl(item.kind, shell.id),
+            url: driveUrl(item.kind, shell.id, treeMode.mode),
             kind: item.kind,
           });
           created++;
-          step(`reserved Doc for ${item.relPath}`);
+          step(
+            treeMode.mode === "native"
+              ? `reserved .md file for ${item.relPath}`
+              : `reserved Doc for ${item.relPath}`,
+          );
         } else {
           const { media, mediaMime, note } = tabularPayload(root, item.relPath, item.kind);
           if (note) diagnostics.push(note);
@@ -463,7 +480,11 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
 
       // update / unchanged: the id is already known
       const fileId = item.fileId as string;
-      resolved.set(item.relPath, { fileId, url: driveUrl(item.kind, fileId), kind: item.kind });
+      resolved.set(item.relPath, {
+        fileId,
+        url: driveUrl(item.kind, fileId, treeMode.mode),
+        kind: item.kind,
+      });
       // Unchanged items are checked too: a trashed or inaccessible Drive file is
       // a hard error regardless of whether the local source changed - the agreed
       // contract is "dead id => error (or --repair)", not "error only if you
@@ -476,12 +497,15 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
             // Recreate first, report after: a repair that itself fails is a
             // PUBLISH_FAILED error, never a "repaired" claim.
             if (item.kind === "markdown") {
-              const shell = await drive.createEmptyDoc(item.name, parentId);
+              const shell =
+                treeMode.mode === "native"
+                  ? await drive.createEmptyFile(item.name, "text/markdown", parentId)
+                  : await drive.createEmptyDoc(item.name, parentId);
               manifest.entries[item.relPath] = {
                 fileId: shell.id,
                 kind: item.kind,
                 name: item.name,
-                url: driveUrl(item.kind, shell.id),
+                url: driveUrl(item.kind, shell.id, treeMode.mode),
                 contentHash: "",
                 publishedAt: now().toISOString(),
                 pending: true,
@@ -490,7 +514,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
               toFill.push({ item: { ...item, action: "create" }, fileId: shell.id });
               resolved.set(item.relPath, {
                 fileId: shell.id,
-                url: driveUrl(item.kind, shell.id),
+                url: driveUrl(item.kind, shell.id, treeMode.mode),
                 kind: item.kind,
               });
             } else if (item.kind === "file") {
@@ -629,6 +653,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
       root,
       known,
       naming,
+      mode: treeMode.mode,
     });
     diagnostics.push(...prepared.diagnostics);
     if (prepared.diagnostics.some((d) => d.severity === "error")) {

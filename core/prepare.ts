@@ -15,7 +15,7 @@ import type { NamingConfig } from "./config.ts";
 import { classifyTarget, rewriteLinks } from "./links.ts";
 import { resolveRule, splitFrontMatter } from "./naming.ts";
 import { imageMimeType } from "./scan.ts";
-import type { Diagnostic, FileKind } from "./types.ts";
+import type { Diagnostic, FileKind, MarkdownMode } from "./types.ts";
 
 /** Warn above this per-image size; base64 inflates by ~33%. */
 export const IMAGE_WARN_BYTES = 2 * 1024 * 1024;
@@ -50,6 +50,12 @@ export interface PrepareInput {
    * the Doc name comes from - never the prepared content.
    */
   naming?: NamingConfig;
+  /**
+   * Markdown publish mode: "doc" (default) uploads for Doc conversion;
+   * "native" produces raw markdown for Drive's Markdown Mode - no image
+   * inlining, heading anchors preserved (design: docs/native-markdown-mode.md).
+   */
+  mode?: MarkdownMode;
 }
 
 export interface PrepareResult {
@@ -89,6 +95,7 @@ function safeDecode(s: string): string {
  */
 export function prepareMarkdown(input: PrepareInput): PrepareResult {
   const diagnostics: Diagnostic[] = [];
+  const mode = input.mode ?? "doc";
   const fm = splitFrontMatter(input.markdown);
   if (fm.present) {
     // The wording must match what the naming config actually does: under a
@@ -101,9 +108,15 @@ export function prepareMarkdown(input: PrepareInput): PrepareResult {
       relPath: input.relPath,
       message: fm.fields.title
         ? titleFeedsName
-          ? `front matter removed (Drive would mangle it); title "${fm.fields.title}" used as the Doc name`
-          : `front matter removed (Drive would mangle it); title "${fm.fields.title}" not used as the Doc name (naming strategy "${strategy}")`
-        : "front matter removed (the Drive importer turns it into a mangled heading)",
+          ? mode === "native"
+            ? `front matter removed (YAML renders as junk in the Markdown Mode viewer); title "${fm.fields.title}" used as the file name`
+            : `front matter removed (Drive would mangle it); title "${fm.fields.title}" used as the Doc name`
+          : mode === "native"
+            ? `front matter removed (YAML renders as junk in the Markdown Mode viewer); title "${fm.fields.title}" not used as the file name (naming strategy "${strategy}")`
+            : `front matter removed (Drive would mangle it); title "${fm.fields.title}" not used as the Doc name (naming strategy "${strategy}")`
+        : mode === "native"
+          ? "front matter removed (YAML renders as junk in the Markdown Mode viewer)"
+          : "front matter removed (the Drive importer turns it into a mangled heading)",
     });
   }
 
@@ -134,6 +147,18 @@ export function prepareMarkdown(input: PrepareInput): PrepareResult {
     }
 
     if (link.isImage) {
+      // Native mode never uploads or inlines local images: the Markdown Mode
+      // viewer cannot resolve them either way. Left as-is, loudly (the
+      // options are named in the message).
+      if (mode === "native") {
+        diagnostics.push({
+          code: "MD_NATIVE_IMAGE_LOCAL",
+          severity: "warn",
+          relPath: input.relPath,
+          message: `local image left as-is (the Markdown Mode viewer cannot resolve local paths): use a remote https URL, reference it in prose, or publish this tree in doc mode (${link.raw})`,
+        });
+        return null;
+      }
       const abs = path.join(input.root, resolvedPath);
       const mime = imageMimeType(resolvedPath);
       if (!mime) {
@@ -190,6 +215,18 @@ export function prepareMarkdown(input: PrepareInput): PrepareResult {
       return null;
     }
     if (link.anchor) {
+      if (mode === "native") {
+        // Kept: the fragment is appended to the target's Drive URL. Whether
+        // Markdown Mode actually scrolls to it is unverified, so say so -
+        // once per publish (identical message, no relPath: deduped).
+        diagnostics.push({
+          code: "ANCHOR_UNVERIFIED",
+          severity: "info",
+          message:
+            "heading anchors are preserved in rewritten links; whether Drive's Markdown Mode scrolls to them is unverified",
+        });
+        return `${target.url}${link.anchor}`;
+      }
       diagnostics.push({
         code: "ANCHOR_DROPPED",
         severity: "warn",
@@ -202,9 +239,10 @@ export function prepareMarkdown(input: PrepareInput): PrepareResult {
 
   // In analyzeOnly mode the image payloads were replaced by placeholders, so
   // the real upload size is the text plus the base64 size of each image.
+  // The cap is a Docs-conversion limit: a raw .md upload has no such ceiling.
   const textBytes = Buffer.byteLength(content, "utf8");
   const payloadBytes = input.analyzeOnly ? textBytes + imageBytes : textBytes;
-  if (payloadBytes > DOC_MAX_BYTES) {
+  if (mode === "doc" && payloadBytes > DOC_MAX_BYTES) {
     diagnostics.push({
       code: "DOC_PAYLOAD_TOO_LARGE",
       severity: "error",
