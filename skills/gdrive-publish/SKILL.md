@@ -44,10 +44,12 @@ Warnings are normal, not failures. The ones that matter to a user:
 
 | Warning | What to tell the user |
 |---|---|
-| `ANCHOR_DROPPED` | The link works but lands at the top of the Doc, not the section. Google Docs headings have no stable anchors we can target yet. |
+| `ANCHOR_DROPPED` | (Doc mode) The link works but lands at the top of the Doc, not the section. Google Docs headings have no stable anchors we can target yet. In native markdown mode anchors are kept instead - see `ANCHOR_UNVERIFIED`. |
+| `ANCHOR_UNVERIFIED` | (Native mode, info) The `#section` fragment was kept on the rewritten link. Whether Drive's Markdown Mode actually scrolls to it is unverified - check the link after publishing if it matters. |
 | `LINK_OUTSIDE_ROOT` | The link points outside the published folder, so it was left as-is and will be broken in Drive. Either move the file into the folder or change the link. |
 | `LINK_TARGET_MISSING` | Broken link in the source, left verbatim. Worth fixing locally. |
 | `FRONTMATTER_STRIPPED` | Expected. Drive mangles YAML front matter, so it is removed; `title:` became the Doc name (under a heading/filename `naming` strategy the message says the title was *not* used - equally expected). |
+| `MD_NATIVE_IMAGE_LOCAL` | (Native mode) A local image link cannot render in the Markdown Mode viewer, so it was left as-is. The user's options: point at a remote `https://` image, reference the image in prose, or switch that tree to doc mode - but switching a published tree requires deleting the manifest and Drive folder and re-initialising. |
 | `NAMING_FALLBACK` | The configured `naming` strategy found its source missing (no front-matter title, no H1, or `strip` emptied it); the Doc published under the fallback name named in the warning. Harmless unless the user expected that source to exist - point them at the file or the `naming` config. |
 | `IMAGE_UNREFERENCED` | The image is not referenced by any markdown, so it publishes nowhere. Tell the user their options: reference it, claim it via rawPatterns (uploads it as a raw file), or delete it. |
 | `IMAGE_LARGE` | Images are embedded as base64, which inflates the upload by ~33%. Consider shrinking it. |
@@ -60,6 +62,7 @@ Warnings are normal, not failures. The ones that matter to a user:
 | `DRIVE_REPAIRED` | The file was recreated under a new Drive id. Any previously shared URL for it no longer works - tell the user which files were affected. |
 | `ORPHAN` | A local file was deleted but its Doc still exists. Nothing was removed. Only run with `prune: true` if the user explicitly wants it trashed. |
 | `PENDING_RESUMED` | A previous run died midway; this run filled the reserved Doc. No action needed. |
+| `MODE_MISMATCH` | An **error**: `.gdrive-publish.json` asks for a different `markdownMode` than the manifest stamps. Never "fix" this by editing the manifest; switching modes on a published tree means deleting the manifest and the Drive folder and re-running `init --markdown-mode`. Confirm with the user before deleting anything. |
 
 ## Rules
 
@@ -77,6 +80,15 @@ Warnings are normal, not failures. The ones that matter to a user:
 - If the user wants the Drive folder somewhere specific, tell them to move it
   in Drive after `init`; access survives the move, and the manifest keeps
   working.
+- **Markdown mode is per-tree and chosen at init** (`--markdown-mode <doc|native>`).
+  A native tree publishes `.md` as raw Drive markdown (Markdown Mode preview,
+  byte-perfect round-trip, kept anchors, local images left as-is). The manifest
+  stamps it; if the config later disagrees, publish refuses with `MODE_MISMATCH`.
+  Never suggest switching modes on a published tree - it requires deleting the
+  manifest and the Drive folder.
+- The extension's `init` command creates doc-mode trees; a native tree needs
+  `gdrive-publish init <dir> --name <name> --markdown-mode native` in a
+  terminal.
 
 ## Getting a file's stable URL
 

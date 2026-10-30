@@ -161,6 +161,48 @@ plan, and asks you to verify the patterns before the next `plan` or
 `publish`. Files without an extension (e.g. `Makefile`) cannot be covered
 automatically and are listed for manual patterns.
 
+## Native markdown mode (opt-in)
+
+By default markdown becomes Google Docs. `--markdown-mode native` at `init`
+publishes `.md` files as **raw Drive markdown files** instead - previewed,
+edited and commented through Drive's Docs Markdown Mode, with a
+byte-perfect round-trip to your local files:
+
+```bash
+gdrive-publish init docs/ --name "Project X Docs" --markdown-mode native
+```
+
+The mode is stamped into the manifest and written to
+`.gdrive-publish.json`; it applies to the whole tree, and `plan` and
+`publish` output always shows it. CSV/XLSX Sheets and raw uploads behave
+exactly the same in both modes.
+
+What changes in native mode:
+
+- links between your files rewrite to the target's Drive file view URL,
+  and **heading anchors are kept** (`./details.md#section` keeps its
+  `#section`; an `ANCHOR_UNVERIFIED` note says Markdown Mode scrolling is
+  unconfirmed)
+- local images are **not embedded** - the Markdown Mode viewer cannot
+  resolve local paths, so they are left as-is with an
+  `MD_NATIVE_IMAGE_LOCAL` warning. Your options: point at a remote
+  `https://` image, reference the image in prose, or publish that tree in
+  doc mode. Remote images are untouched
+- front matter is still stripped (it renders as junk in the viewer);
+  `title:` still becomes the file name
+- there is no 10 MB payload cap (that is a Docs-conversion limit; raw
+  uploads have no such ceiling)
+
+**Before promising the viewer:** Markdown Mode is a Google-side feature.
+Check it on the accounts you care about (right-click an `.md` in Drive →
+Open with → Preview). Without it you still get correct raw files - just
+no nice preview.
+
+**Mode is per-tree and permanent:** switching a published tree between
+modes is refused with a `MODE_MISMATCH` error, because it would change
+every file's Drive type and URL shape. To switch, delete the manifest and
+the Drive folder and re-run `init` with the other mode.
+
 ## Document naming (opt-in)
 
 By default a markdown Doc gets the name of its front-matter `title:`, else
@@ -447,7 +489,8 @@ Tool version at generation time: 0.11.0.
 | `ambiguous rclone remotes` | More than one drive remote has its own credentials. Set `GDRIVE_PUBLISH_RCLONE_REMOTE=<name>`. |
 | `invalid_client` during login | Usually a stale or wrong client secret. If you maintain your own OAuth client, re-download `client_secret.json`. |
 | Links to images do not render | Drive fetches image URLs anonymously, so only images embedded as data URIs render. This tool always inlines images; if you pasted a `drive.google.com/uc?...` link by hand, expect a blank placeholder on Workspaces that block anyone-with-link sharing. |
-| `DOC_PAYLOAD_TOO_LARGE` | The prepared document exceeds 10 MB after inlining images as base64. Shrink or remove images. |
+| `DOC_PAYLOAD_TOO_LARGE` | The prepared document exceeds 10 MB after inlining images as base64. Shrink or remove images. (Native mode has no such cap.) |
+| `MODE_MISMATCH` | `.gdrive-publish.json` and the manifest disagree on `markdownMode`. The mode is chosen at `init` and cannot be switched on a published tree - delete the manifest and the Drive folder, then re-run `init` with the mode you want. |
 | `DRIVE_FILE_GONE` | A manifest entry points at a file that was trashed or became inaccessible; that file is skipped and the run reports an error. Restore it in Drive, or re-run with `--repair` to recreate it (under a new id - previously shared URLs for it stop working). |
 | A Doc shows the old content after publish | Check for `DRIVE_MODIFIED` in the report — a Drive-side edit was overwritten by your local version on purpose. |
 | Orphan warnings you did not expect | A local file was renamed or deleted. Rename it back, or accept the orphan, or `--prune` to trash the Drive file. |
