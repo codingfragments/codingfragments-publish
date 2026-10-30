@@ -15,6 +15,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { MANIFEST_FILENAME, MARKDOWN_MODES } from "./types.ts";
+import type { MarkdownMode } from "./types.ts";
 
 export const CONFIG_FILENAME = ".gdrive-publish.json";
 
@@ -68,6 +70,12 @@ export interface PublishConfig {
    * title -> first H1 -> filename stem.
    */
   naming?: NamingConfig;
+  /**
+   * How markdown publishes: "doc" (default) converts to Google Docs,
+   * "native" keeps raw .md files for Drive's Markdown Mode. Stamped into
+   * the manifest at init; the mode applies to the whole tree.
+   */
+  markdownMode?: MarkdownMode;
 }
 
 /** Default concurrency: mid-band of Google's documented 2–5 recommendation. */
@@ -80,6 +88,58 @@ export function parseConcurrency(value: string): number | null {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > MAX_CONCURRENCY) return null;
   return n;
+}
+
+/** Strict parse of a `--markdown-mode` flag value. */
+export function parseMarkdownMode(value: string): MarkdownMode | null {
+  return MARKDOWN_MODES.includes(value as MarkdownMode) ? (value as MarkdownMode) : null;
+}
+
+/** The mode a config asks for; absent config or key means the historical "doc". */
+export function effectiveMode(config: PublishConfig | null | undefined): MarkdownMode {
+  return config?.markdownMode ?? "doc";
+}
+
+export interface TreeModeResolution {
+  /** The mode this tree publishes markdown in. */
+  mode: MarkdownMode;
+  /**
+   * Present when the config asks for a different mode than the manifest
+   * stamps (or a pre-stamp tree asks for native): publishing must refuse.
+   * Switching modes on a published tree is deliberate surgery - delete the
+   * manifest and the Drive folder, re-init (docs/native-markdown-mode.md).
+   */
+  mismatchMessage?: string;
+}
+
+/**
+ * Resolve a tree's markdown mode: the manifest stamp wins; without a
+ * manifest (a tree not yet initialised) the config's wish applies. A
+ * manifest without a stamp is the historical "doc" mode.
+ */
+export function resolveTreeMode(
+  manifest: { markdownMode?: MarkdownMode } | null,
+  config: PublishConfig | null | undefined,
+): TreeModeResolution {
+  const configMode = config?.markdownMode;
+  if (!manifest) return { mode: configMode ?? "doc" };
+  const manifestMode = manifest.markdownMode;
+  if (manifestMode === undefined) {
+    if (configMode === "native") {
+      return {
+        mode: "doc",
+        mismatchMessage: `MODE_MISMATCH: .gdrive-publish.json asks for markdownMode "native", but this tree was published before that mode existed (no stamp in ${MANIFEST_FILENAME}). Switching modes on a published tree is not supported - delete ${MANIFEST_FILENAME} and the Drive folder, then re-run init --markdown-mode native`,
+      };
+    }
+    return { mode: configMode ?? "doc" };
+  }
+  if (configMode !== undefined && configMode !== manifestMode) {
+    return {
+      mode: manifestMode,
+      mismatchMessage: `MODE_MISMATCH: ${MANIFEST_FILENAME} stamps markdown mode "${manifestMode}" but .gdrive-publish.json says "${configMode}". Switching modes on a published tree is not supported - delete ${MANIFEST_FILENAME} and the Drive folder, then re-run init --markdown-mode ${configMode}`,
+    };
+  }
+  return { mode: manifestMode };
 }
 
 /** Extensions that look like credentials: covered only with a loud caution. */
@@ -148,10 +208,11 @@ export function loadConfig(root: string): PublishConfig | null {
       key !== "rawPatterns" &&
       key !== "ignorePatterns" &&
       key !== "concurrency" &&
-      key !== "naming"
+      key !== "naming" &&
+      key !== "markdownMode"
     ) {
       throw new Error(
-        `${CONFIG_FILENAME}: unknown key "${key}" (only rawPatterns, ignorePatterns, concurrency and naming are supported)`,
+        `${CONFIG_FILENAME}: unknown key "${key}" (only rawPatterns, ignorePatterns, concurrency, naming and markdownMode are supported)`,
       );
     }
   }
@@ -180,12 +241,22 @@ export function loadConfig(root: string): PublishConfig | null {
   ) {
     throw new Error(`${CONFIG_FILENAME}: ignorePatterns must be an array of strings`);
   }
+  const markdownMode = obj.markdownMode;
+  if (
+    markdownMode !== undefined &&
+    (typeof markdownMode !== "string" || !MARKDOWN_MODES.includes(markdownMode as MarkdownMode))
+  ) {
+    throw new Error(
+      `${CONFIG_FILENAME}: "markdownMode" must be one of ${MARKDOWN_MODES.map((m) => `"${m}"`).join(", ")}`,
+    );
+  }
   const naming = obj.naming === undefined ? undefined : validateNaming(obj.naming);
   return {
     rawPatterns: (patterns as string[] | undefined) ?? [],
     ...(ignore !== undefined ? { ignorePatterns: ignore as string[] } : {}),
     ...(concurrency !== undefined ? { concurrency: concurrency as number } : {}),
     ...(naming !== undefined ? { naming } : {}),
+    ...(markdownMode !== undefined ? { markdownMode: markdownMode as MarkdownMode } : {}),
   };
 }
 

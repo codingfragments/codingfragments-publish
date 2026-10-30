@@ -137,7 +137,7 @@ test("unknown keys still name every supported key", () => {
   fs.writeFileSync(path.join(root, ".gdrive-publish.json"), JSON.stringify({ whatever: 1 }));
   assert.throws(
     () => loadConfig(root),
-    /only rawPatterns, ignorePatterns, concurrency and naming are supported/,
+    /only rawPatterns, ignorePatterns, concurrency, naming and markdownMode are supported/,
   );
 });
 

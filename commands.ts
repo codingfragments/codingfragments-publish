@@ -93,7 +93,13 @@ export const COMMANDS: CommandSpec[] = [
       "creates its subfolders inside it. The folder must be visible under the\n" +
       "drive.file scope - i.e. created by the same OAuth project. Folders made\n" +
       "in the Drive web UI are NOT visible to this tool; init your own folder and\n" +
-      "move it into place instead (moves are always supported).",
+      "move it into place instead (moves are always supported).\n\n" +
+      "--markdown-mode is stamped into the manifest and written to\n" +
+      ".gdrive-publish.json; the mode applies to the whole tree and cannot be\n" +
+      "switched on a published tree - that requires deleting the manifest and\n" +
+      "the Drive folder and re-initialising. native publishes .md files as raw\n" +
+      "Drive markdown (Docs Markdown Mode preview/edit/comment) instead of\n" +
+      "converting them to Google Docs.",
     flags: [
       {
         name: "name",
@@ -108,6 +114,12 @@ export const COMMANDS: CommandSpec[] = [
         valueLabel: "<url|id>",
       },
       {
+        name: "markdown-mode",
+        summary: "markdown as Docs (doc, default) or raw .md (native)",
+        takesValue: true,
+        valueLabel: "<doc|native>",
+      },
+      {
         name: "force",
         summary: "allow init inside a tree that already has a publish root (nested roots)",
       },
@@ -116,6 +128,7 @@ export const COMMANDS: CommandSpec[] = [
     examples: [
       `${BIN} init docs/ --name "Project X Docs"`,
       `${BIN} init docs/ --into https://drive.google.com/drive/folders/<id>`,
+      `${BIN} init docs/ --name "Project X Docs" --markdown-mode native`,
     ],
   },
   {

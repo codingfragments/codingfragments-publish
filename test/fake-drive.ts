@@ -69,6 +69,21 @@ export class FakeDrive implements DriveClient {
     return file;
   }
 
+  async createEmptyFile(name: string, mimeType: string, parentId: string): Promise<DriveFile> {
+    this.calls.push(`createEmptyFile(${name},${mimeType},${parentId})`);
+    if (this.failNames.has(name)) this.reject(name);
+    if (name === this.rateLimitOn) this.rateLimitListener?.();
+    const file: FakeFile = {
+      id: this.nextId("raw"),
+      name,
+      mimeType,
+      parents: [parentId],
+      content: "",
+    };
+    this.files.set(file.id, file);
+    return file;
+  }
+
   async convertUpload(
     name: string,
     targetMime: string,

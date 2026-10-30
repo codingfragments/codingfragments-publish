@@ -1,10 +1,10 @@
 # gdrive-publish
 
 Publish a folder of markdown, CSV and Excel files to Google Drive as **native
-Google types** — markdown becomes Google Docs, CSV/XLSX become Google Sheets —
-while **relative links between your files are rewritten to the real Google Doc
-URLs**. A `toc.md` linking to `./details.md` becomes a Doc whose link opens the
-*details* Doc.
+Google types** — markdown becomes Google Docs (or, opt-in, stays raw `.md` for
+Drive's Markdown Mode), CSV/XLSX become Google Sheets — while **relative links
+between your files are rewritten to the real Drive URLs**. A `toc.md` linking
+to `./details.md` becomes a Doc whose link opens the *details* Doc.
 
 Re-publishing updates the same Drive files in place, so **URLs you shared stay
 valid**.
@@ -66,7 +66,8 @@ Publishing is two-phase, which is what makes link rewriting possible at all:
 ```
 phase 0  scan the tree, build the link graph, run the full offline
          link/image analysis                            (no network)
-phase 1  create folders; create EMPTY Doc shells for each .md;
+phase 1  create folders; create EMPTY Doc shells for each .md
+         (raw text/markdown shells in native mode);
          convert-upload CSV/XLSX  -> every fileId is now known
          -> manifest checkpointed with `pending` markers
 phase 2  rewrite relative links to real Doc/Sheet URLs, inline images,
@@ -186,6 +187,42 @@ shows the file and the resulting plan - verify the patterns before the
 next run. The suggestion also cautions when a derived pattern looks
 credential-adjacent (`.env`, `.pem`, `id_rsa`, …).
 
+## Native markdown mode (opt-in)
+
+`markdownMode: "native"` publishes `.md` files as **raw Drive markdown
+files** instead of converting them to Google Docs: byte-perfect round-trip,
+local file stays the source of truth, no conversion losses, and no 10 MB
+Docs payload cap. In Drive these files preview, edit and accept comments
+through Docs' **Markdown Mode** (rollout from 2026-10-05).
+
+The mode is chosen per tree at init and stamped into the manifest:
+
+```bash
+gdrive-publish init docs/ --name "Project X Docs" --markdown-mode native
+```
+
+`init` also writes `"markdownMode": "native"` into `.gdrive-publish.json`.
+The default stays `doc`; nothing changes for existing trees.
+
+Behaviour differences in native mode:
+
+- links rewrite to the target's Drive **file view URL** (`drive.google.com/file/d/<id>/view`), not a Docs edit URL
+- heading anchors are **kept** (`#section` survives on the rewritten link; an `ANCHOR_UNVERIFIED` info notes that Markdown Mode scrolling is unconfirmed)
+- local relative images are **left as-is** with an `MD_NATIVE_IMAGE_LOCAL` warning - the viewer cannot resolve local paths. Options: use a remote `https` URL, reference the image in prose, or publish that tree in doc mode. Remote images pass untouched
+- front matter is still stripped (YAML renders as junk in the viewer); `title:` still becomes the file name
+- CSV/XLSX Sheets and `rawPatterns` behave exactly as in doc mode
+
+**Availability caveat:** Markdown Mode is a Google-side feature and may not be
+everywhere yet. Before promising it to a team, check on the target account:
+right-click an `.md` file in Drive → Open with → Preview. If it is not live,
+native mode still uploads fine - users just get raw files without the nice
+viewer.
+
+**Switching modes on a published tree is refused** (`MODE_MISMATCH` hard
+error): the mode is part of the tree's identity, and flipping it would change
+every entry's mimeType and URL shape. The deliberate path is deleting the
+manifest and the Drive folder and re-running `init` with the other mode.
+
 ## The manifest
 
 `.gdrive-manifest.json` sits next to your docs and **should be committed** — it
@@ -203,12 +240,12 @@ them, the next run fills those exact Docs instead of creating duplicates.
 |---|---|
 | `[x](./other.md)` | rewritten to the other file's Doc URL |
 | `[x](./data.csv)` | rewritten to the Sheet URL |
-| `[x](./other.md#section)` | links to the top of the Doc, anchor dropped (warned) |
+| `[x](./other.md#section)` | links to the top of the Doc, anchor dropped (warned); in native mode the anchor is kept on the rewritten link |
 | `[x](../outside.md)` | left verbatim (warned) — outside the publish root |
 | `[x](https://…)` | untouched |
 | `[x](./missing.md)` | left verbatim (warned) |
 | links inside ``` fences / `code spans` | never rewritten |
-| `![img](./pic.png)` | **inlined as a base64 `data:` URI** so Drive embeds a real copy |
+| `![img](./pic.png)` | **inlined as a base64 `data:` URI** so Drive embeds a real copy; in native mode left as-is (warned, the viewer cannot resolve local paths) |
 | YAML front matter | stripped (Drive mangles it); `title:` becomes the Doc name |
 | Doc name | front-matter `title` → first H1 → filename stem |
 | `.csv` | dialect + encoding sniffed, normalised to UTF-8 comma CSV, then converted |
@@ -258,6 +295,7 @@ executed through Node's native type stripping - there is no build step.
 | `drive-manifest-report.test.ts` | 18 | exact REST request shapes, error-reason parsing, atomic/sorted manifest IO, report rendering |
 | `publish.test.ts` | 17 | two-phase ordering, update-in-place, crash recovery, orphan safety, trash-not-delete, diagnostic dedupe |
 | `cli.test.ts` | 18 | exit-code contract (0/1/2/3), `--json` shape, dry-run purity, plan/publish diagnostic parity, secrets never printed |
+| `native-mode.test.ts` | 25 | mode config plumbing, MODE_MISMATCH guard, native publish behaviour (raw shells, kept anchors, no inlining) |
 | `extension.test.ts` | 10 | the tool is registered only in configured projects; writes are confirm-gated |
 
 The Drive REST layer is tested by swapping `globalThis.fetch`, so request
@@ -283,8 +321,9 @@ so a missing warning is visibly a regression.
   inspect pixels). An `<img>` tag, an `![]()` construct, or a `word/media/*`
   part in a docx export all report success on a document that is visibly
   blank - three false positives that a human eye caught during the spike.
-- **Heading anchors** are dropped rather than resolved to Google Docs heading
-  ids.
+- **Heading anchors** are dropped in doc mode rather than resolved to Google
+  Docs heading ids; native mode keeps them but Markdown Mode scrolling is
+  unverified.
 - **`--repair`** is not implemented: an inaccessible or trashed Drive file
   produces a `DRIVE_FILE_GONE` error instead of being recreated.
 

@@ -53,6 +53,12 @@ export interface DriveFile {
 export interface DriveClient {
   createFolder(name: string, parentId?: string): Promise<DriveFile>;
   createEmptyDoc(name: string, parentId: string): Promise<DriveFile>;
+  /**
+   * Metadata-only files.create: a 0-byte shell of any mimeType (e.g.
+   * text/markdown for native mode), filled later via updateMedia. The
+   * generic counterpart to createEmptyDoc.
+   */
+  createEmptyFile(name: string, mimeType: string, parentId: string): Promise<DriveFile>;
   /** Convert-on-upload: metadata mimeType is the Google type, media is the source. */
   convertUpload(
     name: string,
@@ -168,6 +174,12 @@ export class RestDriveClient implements DriveClient {
   async createEmptyDoc(name: string, parentId: string): Promise<DriveFile> {
     return (await this.request("POST", `${API}/drive/v3/files?fields=${FIELDS}`, {
       json: { name, mimeType: GOOGLE_DOC, parents: [parentId] },
+    })) as DriveFile;
+  }
+
+  async createEmptyFile(name: string, mimeType: string, parentId: string): Promise<DriveFile> {
+    return (await this.request("POST", `${API}/drive/v3/files?fields=${FIELDS}`, {
+      json: { name, mimeType, parents: [parentId] },
     })) as DriveFile;
   }
 

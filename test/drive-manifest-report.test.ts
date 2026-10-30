@@ -81,6 +81,15 @@ test("createEmptyDoc requests a native Google Doc with no media", async () => {
   assert.equal(captured[0]?.contentType, "application/json");
 });
 
+test("createEmptyFile requests a 0-byte shell with the given mimeType", async () => {
+  stubFetch({ id: "mdf1", name: "A", mimeType: "text/markdown" });
+  await new RestDriveClient(tokens).createEmptyFile("A", "text/markdown", "fld1");
+  const sent = JSON.parse(captured[0]?.body ?? "{}") as Record<string, unknown>;
+  assert.equal(sent.mimeType, "text/markdown", "native mode reserves a raw .md shell");
+  assert.deepEqual(sent.parents, ["fld1"]);
+  assert.equal(captured[0]?.contentType, "application/json");
+});
+
 test("convertUpload sends metadata mime + media mime as multipart/related", async () => {
   stubFetch({ id: "sht1", name: "data", mimeType: GOOGLE_SHEET });
   await new RestDriveClient(tokens).convertUpload(
@@ -247,6 +256,7 @@ function samplePlan(): Plan {
   return {
     root: "/docs",
     rootFolderId: "fld1",
+    markdownMode: "doc",
     folders: ["guide"],
     items: [
       { relPath: "new.md", kind: "markdown", action: "create", name: "New", folder: "" },
@@ -305,6 +315,7 @@ test("renderSummary always reminds the user to commit the manifest", () => {
     diagnostics: [] as Diagnostic[],
     manifestPath: "/docs/.gdrive-manifest.json",
     rootFolderUrl: folderUrl("fld1"),
+    markdownMode: "doc",
   };
   const out = renderSummary(summary);
   assert.match(out, /1 created, 2 updated, 1 repaired, 3 unchanged, 0 pruned, 0 failed, 1 orphan/);

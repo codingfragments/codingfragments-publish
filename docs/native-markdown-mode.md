@@ -1,7 +1,8 @@
 # Design: `markdownMode: "native"` for gdrive-publish
 
-Status: **planned, not implemented** — decisions locked 2026-10-24. Each implementation
-slice lands as a branch + PR off `main`; nothing merges without review.
+Status: **implemented** (all four slices, landed as one PR
+`feat/gdrive-native-md`). Decisions locked 2026-10-24. Implementation notes
+below the spec record where reality needed wording changes.
 
 ## Background
 
@@ -100,3 +101,23 @@ final diagnostic wording.
 - Test harness & stress-test plan for the native path (fake-drive extension,
   scratch-account integration harness, record/replay for CI, nightly canary)
   — discussed 2026-10-24, to be designed separately.
+
+## Implementation notes (2026, landed on feat/gdrive-native-md)
+
+- `resolveTreeMode(manifest, config)` in `core/config.ts` implements the mode
+  scope: the manifest stamp wins; a config that contradicts it (or asks for
+  native on an unstamped, already published tree) is a `MODE_MISMATCH` error
+  both in `buildPlan` (as an error diagnostic) and in `publish()` (a hard
+  throw before any Drive call).
+- `Diagnostic.severity` gained `"info"` (rendered as `INFO` lines) so
+  `ANCHOR_UNVERIFIED` can be once-per-publish and non-alarming; it dedupes
+  because it carries no `relPath` and an identical message.
+- Native entries link to `https://drive.google.com/file/d/<id>/view`
+  (`driveUrl(kind, id, mode)`); the same update-in-place two-phase mechanic
+  keeps fileIds and those URLs stable.
+- Latent bug fixed in passing: `plan --suggest-config` rebuilt
+  `.gdrive-publish.json` without the `naming` section - it now preserves
+  `naming` and `markdownMode` too.
+- The extension's `/gdrive-publish-init` still creates doc-mode trees only;
+  native mode is CLI-only (`init --markdown-mode native`), documented in the
+  skill.
