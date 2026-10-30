@@ -13,6 +13,10 @@ export const GOOGLE_DOC = "application/vnd.google-apps.document";
 export const GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet";
 export const GOOGLE_FOLDER = "application/vnd.google-apps.folder";
 
+/** How markdown publishes: "doc" converts to a Google Doc, "native" keeps raw .md. */
+export type MarkdownMode = "doc" | "native";
+export const MARKDOWN_MODES: readonly MarkdownMode[] = ["doc", "native"];
+
 /** Warning/error codes surfaced in reports. Stable identifiers: do not rename. */
 export type DiagnosticCode =
   | "ANCHOR_DROPPED"
@@ -34,9 +38,12 @@ export type DiagnosticCode =
   | "ORPHAN"
   | "UNSUPPORTED_FILE"
   | "PENDING_RESUMED"
-  | "NAMING_FALLBACK";
+  | "NAMING_FALLBACK"
+  | "MD_NATIVE_IMAGE_LOCAL"
+  | "MODE_MISMATCH"
+  | "ANCHOR_UNVERIFIED";
 
-export type Severity = "warn" | "error";
+export type Severity = "warn" | "error" | "info";
 
 export interface Diagnostic {
   code: DiagnosticCode;
@@ -89,6 +96,8 @@ export interface RawSuggestion {
 export interface Plan {
   root: string;
   rootFolderId?: string;
+  /** Markdown publish mode this run uses (manifest stamp > config; default "doc"). */
+  markdownMode: MarkdownMode;
   /** Drive folder paths that need to exist, parents before children. */
   folders: string[];
   items: PlanItem[];
@@ -118,6 +127,8 @@ export interface Manifest {
   /** Informational: which credential source and client published this tree. */
   credentialSource?: string;
   clientIdHash?: string;
+  /** Markdown publish mode stamped by `init --markdown-mode`; absent = the historical "doc". */
+  markdownMode?: MarkdownMode;
   /** Drive folder ids by relative folder path ("" is the publish root). */
   folders: Record<string, string>;
   /** Published files by source relPath. */
@@ -137,15 +148,21 @@ export interface PublishSummary {
   diagnostics: Diagnostic[];
   manifestPath: string;
   rootFolderUrl: string;
+  /** Markdown publish mode this run used. */
+  markdownMode: MarkdownMode;
   /** Concurrency used, after adaptive throttling (always set by publish). */
   concurrency?: { requested: number; effective: number; rateLimitEvents: number };
 }
 
-export function driveUrl(kind: FileKind, fileId: string): string {
+export function driveUrl(kind: FileKind, fileId: string, mode: MarkdownMode = "doc"): string {
   if (kind === "csv" || kind === "xlsx") {
     return `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
   }
   if (kind === "file") {
+    return `https://drive.google.com/file/d/${fileId}/view`;
+  }
+  if (kind === "markdown" && mode === "native") {
+    // A raw .md in Drive: the file view URL is where Markdown Mode preview lives.
     return `https://drive.google.com/file/d/${fileId}/view`;
   }
   return `https://docs.google.com/document/d/${fileId}/edit`;

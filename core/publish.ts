@@ -14,7 +14,13 @@
  */
 
 import fs from "node:fs";
-import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, derivePatterns, loadConfig } from "./config.ts";
+import {
+  DEFAULT_CONCURRENCY,
+  MAX_CONCURRENCY,
+  derivePatterns,
+  loadConfig,
+  resolveTreeMode,
+} from "./config.ts";
 import type { NamingConfig, NamingRule } from "./config.ts";
 import { describeDialect, normaliseCsv } from "./csv.ts";
 import type { DriveClient } from "./drive.ts";
@@ -93,7 +99,12 @@ function hashFor(file: SourceFile): string {
 export function buildPlan(opts: PlanOptions): Plan {
   const { files, skipped } = scan(opts.root);
   const referenced = referencedImages(opts.root, files);
-  const naming = opts.naming ?? loadConfig(opts.root)?.naming;
+  const config = loadConfig(opts.root);
+  const naming = opts.naming ?? config?.naming;
+  // The tree's mode: the manifest stamp wins, the config is advisory, and
+  // a disagreement between them is a MODE_MISMATCH error (switching modes
+  // on a published tree is deliberate surgery; docs/native-markdown-mode.md).
+  const treeMode = resolveTreeMode(opts.manifest, config);
 
   // What a `plan --suggest-config` run could automate: patterns derived
   // from the extensions of the files that remain unsupported.
@@ -108,6 +119,13 @@ export function buildPlan(opts: PlanOptions): Plan {
   }
 
   const diagnostics: Diagnostic[] = [];
+  if (treeMode.mismatchMessage) {
+    diagnostics.push({
+      code: "MODE_MISMATCH",
+      severity: "error",
+      message: treeMode.mismatchMessage,
+    });
+  }
   for (const relPath of skipped) {
     diagnostics.push({
       code: "UNSUPPORTED_FILE",
@@ -233,6 +251,7 @@ export function buildPlan(opts: PlanOptions): Plan {
   return {
     root: opts.root,
     ...(manifest ? { rootFolderId: manifest.rootFolderId } : {}),
+    markdownMode: treeMode.mode,
     folders: folderPaths(files.filter((f) => f.kind !== "image")),
     items,
     orphans,
@@ -288,7 +307,13 @@ export interface PublishOptions {
 export async function publish(opts: PublishOptions): Promise<PublishSummary> {
   const { root, drive, manifest, plan } = opts;
   const now = opts.now ?? (() => new Date());
-  const naming = opts.naming ?? loadConfig(root)?.naming;
+  const config = loadConfig(root);
+  const naming = opts.naming ?? config?.naming;
+  const treeMode = resolveTreeMode(manifest, config);
+  // Hard refusal before any Drive call: a mode switch on a published tree
+  // would flip the mimeType and URL shape of every markdown entry, so the
+  // only supported path is delete manifest + Drive folder + re-init.
+  if (treeMode.mismatchMessage) throw new Error(treeMode.mismatchMessage);
   // Bounded parallelism with adaptive throttling: the Drive client reports
   // rate limits, the pool halves, surplus workers stop pulling. Folders and
   // the phase-1/2 barrier stay sequential (design: docs/parallel-publish.md).
@@ -690,6 +715,7 @@ export async function publish(opts: PublishOptions): Promise<PublishSummary> {
     diagnostics: dedupeDiagnostics(diagnostics),
     manifestPath: manifestFile,
     rootFolderUrl: folderUrl(manifest.rootFolderId),
+    markdownMode: treeMode.mode,
     concurrency: { requested: requestedConcurrency, effective: pool.limit, rateLimitEvents },
   };
 }

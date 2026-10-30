@@ -247,6 +247,7 @@ function samplePlan(): Plan {
   return {
     root: "/docs",
     rootFolderId: "fld1",
+    markdownMode: "doc",
     folders: ["guide"],
     items: [
       { relPath: "new.md", kind: "markdown", action: "create", name: "New", folder: "" },
@@ -305,6 +306,7 @@ test("renderSummary always reminds the user to commit the manifest", () => {
     diagnostics: [] as Diagnostic[],
     manifestPath: "/docs/.gdrive-manifest.json",
     rootFolderUrl: folderUrl("fld1"),
+    markdownMode: "doc",
   };
   const out = renderSummary(summary);
   assert.match(out, /1 created, 2 updated, 1 repaired, 3 unchanged, 0 pruned, 0 failed, 1 orphan/);

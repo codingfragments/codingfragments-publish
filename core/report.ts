@@ -10,14 +10,23 @@ import type { Diagnostic, Plan, PublishSummary } from "./types.ts";
 export function renderPlan(plan: Plan, root: string): string {
   const lines: string[] = [];
   lines.push(`plan ${root}`);
+  lines.push(
+    `markdown mode: ${
+      plan.markdownMode === "native"
+        ? "native (.md files stay raw, Drive Markdown Mode)"
+        : "doc (converted to Google Docs)"
+    }`,
+  );
   const creates = plan.items.filter((i) => i.action === "create");
   const updates = plan.items.filter((i) => i.action === "update");
   const unchanged = plan.items.filter((i) => i.action === "unchanged");
 
   for (const item of plan.items) {
     const marker = item.action === "create" ? "+" : item.action === "update" ? "~" : "=";
+    const markdownLabel =
+      item.kind === "markdown" ? (plan.markdownMode === "native" ? "Markdown file" : "Doc") : null;
     let detail = `-> ${
-      item.kind === "markdown" ? "Doc" : item.kind === "file" ? "File" : "Sheet"
+      markdownLabel ?? (item.kind === "file" ? "File" : "Sheet")
     } "${item.name}"${item.kind === "file" ? " (raw upload)" : ""}`;
     if (item.kind === "csv") {
       try {
@@ -52,17 +61,28 @@ export function renderDiagnostics(diagnostics: Diagnostic[]): string {
   const lines: string[] = [];
   const errors = diagnostics.filter((d) => d.severity === "error");
   const warnings = diagnostics.filter((d) => d.severity === "warn");
+  const infos = diagnostics.filter((d) => d.severity === "info");
   for (const d of errors) {
     lines.push(`  ERROR ${d.code}${d.relPath ? ` ${d.relPath}` : ""}: ${d.message}`);
   }
   for (const d of warnings) {
     lines.push(`  WARN  ${d.code}${d.relPath ? ` ${d.relPath}` : ""}: ${d.message}`);
   }
+  for (const d of infos) {
+    lines.push(`  INFO  ${d.code}${d.relPath ? ` ${d.relPath}` : ""}: ${d.message}`);
+  }
   return lines.join("\n");
 }
 
 export function renderSummary(summary: PublishSummary): string {
   const lines: string[] = [];
+  lines.push(
+    `  markdown mode: ${
+      summary.markdownMode === "native"
+        ? "native (.md files stay raw, Drive Markdown Mode)"
+        : "doc (converted to Google Docs)"
+    }`,
+  );
   lines.push(
     `  ${summary.created} created, ${summary.updated} updated, ${summary.repaired} repaired, ` +
       `${summary.unchanged} unchanged, ${summary.pruned} pruned, ${summary.failed} failed, ` +
@@ -86,6 +106,7 @@ export function planJson(plan: Plan): unknown {
   return {
     root: plan.root,
     rootFolderId: plan.rootFolderId ?? null,
+    markdownMode: plan.markdownMode,
     folders: plan.folders,
     items: plan.items,
     orphans: plan.orphans,
@@ -103,6 +124,7 @@ export function summaryJson(summary: PublishSummary): unknown {
     unchanged: summary.unchanged,
     pruned: summary.pruned,
     orphans: summary.orphans,
+    markdownMode: summary.markdownMode,
     manifestPath: summary.manifestPath,
     rootFolderUrl: summary.rootFolderUrl,
     concurrency: summary.concurrency ?? null,

@@ -43,6 +43,7 @@ import {
   loadConfig,
   mergePatterns,
   parseConcurrency,
+  parseMarkdownMode,
   saveConfig,
 } from "./core/config.ts";
 import { DriveError, RestDriveClient } from "./core/drive.ts";
@@ -54,7 +55,7 @@ import { buildPlan, publish } from "./core/publish.ts";
 import { planJson, renderPlan, renderSummary, summaryJson } from "./core/report.ts";
 import { classify } from "./core/scan.ts";
 import { GOOGLE_FOLDER, MANIFEST_FILENAME, folderUrl } from "./core/types.ts";
-import type { Manifest } from "./core/types.ts";
+import type { Manifest, MarkdownMode } from "./core/types.ts";
 
 /** Arguments as validated against the command table. */
 interface Args {
@@ -153,6 +154,15 @@ async function cmdInit(args: Args): Promise<void> {
   }
   const name = args.options.get("name");
   const into = args.options.get("into");
+  const modeFlag = args.options.get("markdown-mode");
+  let markdownMode: MarkdownMode | undefined;
+  if (modeFlag !== undefined) {
+    const parsed = parseMarkdownMode(modeFlag);
+    if (!parsed) {
+      fail(2, `--markdown-mode expects doc or native (got: ${modeFlag})`);
+    }
+    markdownMode = parsed;
+  }
 
   // Validate the folder reference before touching credentials so a typo is a
   // cheap usage error, not a network round trip.
@@ -212,10 +222,33 @@ async function cmdInit(args: Args): Promise<void> {
   const manifest = manifestIo.emptyManifest(folderIdFinal, folderName);
   manifest.credentialSource = creds.source;
   manifest.clientIdHash = clientHash(creds.clientId);
+  if (markdownMode) manifest.markdownMode = markdownMode;
   const p = manifestIo.save(root, manifest);
   const url = folderUrl(folderIdFinal);
   const how = folderId ? "using existing Drive folder" : "created Drive folder";
   process.stdout.write(`${how} "${folderName}"\n  ${url}\n`);
+  if (markdownMode) {
+    // The config is the human-facing copy of the stamp: init writes both so
+    // plan/publish output and MODE_MISMATCH checking see the same mode.
+    // Merges, never removes (same discipline as --suggest-config).
+    const existing = loadConfig(root);
+    const configPath = saveConfig(root, {
+      rawPatterns: existing?.rawPatterns ?? [],
+      ...(existing?.ignorePatterns !== undefined
+        ? { ignorePatterns: existing.ignorePatterns }
+        : {}),
+      ...(existing?.concurrency !== undefined ? { concurrency: existing.concurrency } : {}),
+      ...(existing?.naming !== undefined ? { naming: existing.naming } : {}),
+      markdownMode,
+    });
+    process.stdout.write(
+      `markdown mode: ${
+        markdownMode === "native"
+          ? "native (.md files stay raw; Docs Markdown Mode preview/edit/comment)"
+          : "doc (converted to Google Docs)"
+      }\n  stamped into the manifest and written to ${configPath}\n`,
+    );
+  }
   process.stdout.write(
     `manifest: ${p}\n  -> commit it; move/share the folder in Drive as you like\n`,
   );
@@ -257,6 +290,8 @@ function cmdPlan(args: Args): void {
             ? { ignorePatterns: existing.ignorePatterns }
             : {}),
           ...(existing?.concurrency !== undefined ? { concurrency: existing.concurrency } : {}),
+          ...(existing?.naming !== undefined ? { naming: existing.naming } : {}),
+          ...(existing?.markdownMode !== undefined ? { markdownMode: existing.markdownMode } : {}),
         });
         patternsAdded = added;
         manifest = manifestIo.load(root);

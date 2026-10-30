@@ -273,6 +273,7 @@ create the Drive folder and the manifest for a directory
 |---|---|
 | `--name <name>` | name of the Drive folder to create (not needed with --into) |
 | `--into <url|id>` | adopt an existing Drive folder as the publish root instead of creating one |
+| `--markdown-mode <doc|native>` | markdown as Docs (doc, default) or raw .md (native) |
 | `--force` | allow init inside a tree that already has a publish root (nested roots) |
 | `--remote <name>` | rclone remote to take client credentials from |
 
@@ -282,6 +283,10 @@ gdrive-publish init docs/ --name "Project X Docs"
 
 ```
 gdrive-publish init docs/ --into https://drive.google.com/drive/folders/<id>
+```
+
+```
+gdrive-publish init docs/ --name "Project X Docs" --markdown-mode native
 ```
 
 ### `plan`

@@ -64,6 +64,7 @@ export function serialize(manifest: Manifest): string {
     rootFolderName: manifest.rootFolderName,
     ...(manifest.credentialSource ? { credentialSource: manifest.credentialSource } : {}),
     ...(manifest.clientIdHash ? { clientIdHash: manifest.clientIdHash } : {}),
+    ...(manifest.markdownMode ? { markdownMode: manifest.markdownMode } : {}),
     folders: sortedFolders,
     entries: sortedEntries,
   };
