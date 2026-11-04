@@ -66,7 +66,7 @@ export const GLOBAL_FLAGS: FlagSpec[] = [
 
 export const COMMANDS: CommandSpec[] = [
   {
-    name: "login",
+    name: "auth login",
     summary: "authorise once via the browser (scope: drive.file)",
     args: "",
     needsTarget: false,
@@ -74,9 +74,32 @@ export const COMMANDS: CommandSpec[] = [
       "Opens a Google consent screen and caches a refresh token per OAuth client\n" +
       "identity in ~/.config/gdrive-publish/token-<hash>.json (mode 0600).\n\n" +
       "This is the only interactive command: every other command works headless,\n" +
-      "so the CLI stays usable from CI and git hooks.",
+      "so the CLI stays usable from CI and git hooks.\n\n" +
+      "Bare `auth` (without `login`) shows the current auth state instead",
     flags: [REMOTE_FLAG],
-    examples: [`${BIN} login`, `${BIN} login --remote gdriveDD`],
+    examples: [`${BIN} auth login`, `${BIN} auth login --remote gdriveDD`],
+  },
+  {
+    name: "auth status",
+    summary: "show the effective credential source and authentication state",
+    args: "",
+    needsTarget: false,
+    details:
+      "Read-only, offline by default. Explains the credential resolution chain\n" +
+      "step by step - which source won, which were set but skipped and why -\n" +
+      "reporting names, paths and hashes only, never secret values. Also shows\n" +
+      "the client identity hash and the cached token's state.\n\n" +
+      "Bare `auth` means `auth status`. Exits 0 when credentials resolve and a\n" +
+      "token is cached for that client, 1 otherwise, so scripts can gate on it.\n\n" +
+      "--verify adds one authenticated Drive round trip (fetch the signed-in\n" +
+      "account) and, when run inside a publish root, checks the folder is\n" +
+      "visible under drive.file and matches the manifest's client identity",
+    flags: [
+      JSON_FLAG,
+      { name: "verify", summary: "one live Drive round trip to prove the token works" },
+      REMOTE_FLAG,
+    ],
+    examples: [`${BIN} auth`, `${BIN} auth --verify`, `${BIN} auth --json`, `${BIN} auth login`],
   },
   {
     name: "init",
@@ -250,6 +273,7 @@ export const ENVIRONMENT: [string, string][] = [
   ["GDRIVE_PUBLISH_CLIENT_ID", "OAuth client id (with _CLIENT_SECRET, highest priority)"],
   ["GDRIVE_PUBLISH_CLIENT_SECRET", "OAuth client secret"],
   ["GDRIVE_PUBLISH_CLIENT_SECRET_FILE", "path to a Google client_secret.json"],
+  ["GOOGLE_OAUTH_CREDENTIALS", "alias for GDRIVE_PUBLISH_CLIENT_SECRET_FILE (lower priority)"],
   ["GDRIVE_PUBLISH_RCLONE_REMOTE", "rclone remote to borrow client credentials from"],
   ["GDRIVE_PUBLISH_CONCURRENCY", "publish concurrency (1–10) when --concurrency is not given"],
 ];
@@ -420,14 +444,31 @@ export function parseArgv(argv: string[]): ParsedArgv {
     positional.push(arg);
   }
 
+  // `auth` is a command group: `auth login` / `auth status` join into a
+  // single command name, and bare `auth` means the read-only `auth status`.
+  // Any other second token stays a compound name so findCommand rejects it
+  // as unknown (with a typo suggestion) instead of silently misparsing.
+  let command = positional[0] as string | undefined;
+  let rest = positional.slice(1);
+  if (command === "auth") {
+    const sub = rest[0] as string | undefined;
+    if (sub === undefined || sub === "status") {
+      command = "auth status";
+      rest = sub === "status" ? rest.slice(1) : rest;
+    } else {
+      command = `auth ${sub}`;
+      rest = rest.slice(1);
+    }
+  }
+
   return {
-    ...(positional[0] !== undefined ? { command: positional[0] } : {}),
-    ...(positional[1] !== undefined ? { target: positional[1] } : {}),
+    ...(command !== undefined ? { command } : {}),
+    ...(rest[0] !== undefined ? { target: rest[0] } : {}),
     flags,
     options,
     wantsHelp,
     wantsVersion,
-    extras: positional.slice(2),
+    extras: rest.slice(1),
   };
 }
 
@@ -473,8 +514,12 @@ export function validate(spec: CommandSpec, parsed: ParsedArgv): string[] {
   return errors;
 }
 
+/** Commands renamed from earlier releases, mapped to their new spelling. */
+export const RENAMED: Record<string, string> = { login: "auth login" };
+
 /** Suggest the closest command for a typo (single edit-distance pass). */
 export function suggestCommand(input: string): string | null {
+  if (RENAMED[input] !== undefined) return RENAMED[input];
   let best: { name: string; distance: number } | null = null;
   for (const command of COMMANDS) {
     const distance = editDistance(input, command.name);

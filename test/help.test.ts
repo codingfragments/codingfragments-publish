@@ -197,6 +197,7 @@ test("the overview documents every environment variable and exit code", () => {
     "GDRIVE_PUBLISH_CLIENT_ID",
     "GDRIVE_PUBLISH_CLIENT_SECRET",
     "GDRIVE_PUBLISH_CLIENT_SECRET_FILE",
+    "GOOGLE_OAUTH_CREDENTIALS",
     "GDRIVE_PUBLISH_RCLONE_REMOTE",
   ]) {
     assert.match(overview, new RegExp(env));

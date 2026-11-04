@@ -73,6 +73,8 @@ export interface DriveClient {
   get(fileId: string): Promise<DriveFile>;
   trash(fileId: string): Promise<void>;
   exportText(fileId: string, mimeType: string): Promise<string>;
+  /** Cheap authenticated round trip for verification: who is signed in. */
+  aboutUser(): Promise<{ emailAddress: string }>;
   /**
    * Fired whenever Drive answers with a rate limit that is being retried
    * (429 or 403 rateLimitExceeded). Optional: lets callers adapt (halve
@@ -222,6 +224,15 @@ export class RestDriveClient implements DriveClient {
       "GET",
       `${API}/drive/v3/files/${fileId}?fields=${FIELDS}`,
     )) as DriveFile;
+  }
+
+  async aboutUser(): Promise<{ emailAddress: string }> {
+    const res = (await this.request("GET", `${API}/drive/v3/about?fields=user`)) as {
+      user?: { emailAddress?: string };
+    };
+    const email = res.user?.emailAddress;
+    if (!email) throw new DriveError("about?fields=user returned no account", 0, "");
+    return { emailAddress: email };
   }
 
   async trash(fileId: string): Promise<void> {
