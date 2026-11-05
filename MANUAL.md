@@ -44,7 +44,7 @@ the same CLI also runs as `gdrive-publish`.
 ### 1. Log in (once per machine)
 
 ```bash
-gdrive-publish login
+gdrive-publish auth login
 ```
 
 Opens a browser for Google consent, scope
@@ -283,10 +283,10 @@ The reference below is generated from the command table the CLI itself uses
 
 <!-- BEGIN generated: cli-reference -->
 
-### `login`
+### `auth login`
 
 ```
-gdrive-publish login
+gdrive-publish auth login
 ```
 
 authorise once via the browser (scope: drive.file)
@@ -296,11 +296,41 @@ authorise once via the browser (scope: drive.file)
 | `--remote <name>` | rclone remote to take client credentials from |
 
 ```
-gdrive-publish login
+gdrive-publish auth login
 ```
 
 ```
-gdrive-publish login --remote gdriveDD
+gdrive-publish auth login --remote gdriveDD
+```
+
+### `auth status`
+
+```
+gdrive-publish auth status
+```
+
+show the effective credential source and authentication state
+
+| Option | Description |
+|---|---|
+| `--json` | machine-readable output on stdout |
+| `--verify` | one live Drive round trip to prove the token works |
+| `--remote <name>` | rclone remote to take client credentials from |
+
+```
+gdrive-publish auth
+```
+
+```
+gdrive-publish auth --verify
+```
+
+```
+gdrive-publish auth --json
+```
+
+```
+gdrive-publish auth login
 ```
 
 ### `init`
@@ -466,6 +496,7 @@ gdrive-publish help publish
 | `GDRIVE_PUBLISH_CLIENT_ID` | OAuth client id (with _CLIENT_SECRET, highest priority) |
 | `GDRIVE_PUBLISH_CLIENT_SECRET` | OAuth client secret |
 | `GDRIVE_PUBLISH_CLIENT_SECRET_FILE` | path to a Google client_secret.json |
+| `GOOGLE_OAUTH_CREDENTIALS` | alias for GDRIVE_PUBLISH_CLIENT_SECRET_FILE (lower priority) |
 | `GDRIVE_PUBLISH_RCLONE_REMOTE` | rclone remote to borrow client credentials from |
 | `GDRIVE_PUBLISH_CONCURRENCY` | publish concurrency (1–10) when --concurrency is not given |
 
@@ -485,7 +516,7 @@ Tool version at generation time: 0.12.0.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `not authenticated for …` | Run `gdrive-publish login` as the same user, in a terminal (it needs a browser). |
+| `not authenticated for …` | Run `gdrive-publish auth login` as the same user, in a terminal (it needs a browser). |
 | `ambiguous rclone remotes` | More than one drive remote has its own credentials. Set `GDRIVE_PUBLISH_RCLONE_REMOTE=<name>`. |
 | `invalid_client` during login | Usually a stale or wrong client secret. If you maintain your own OAuth client, re-download `client_secret.json`. |
 | Links to images do not render | Drive fetches image URLs anonymously, so only images embedded as data URIs render. This tool always inlines images; if you pasted a `drive.google.com/uc?...` link by hand, expect a blank placeholder on Workspaces that block anyone-with-link sharing. |

@@ -120,6 +120,14 @@ export class FakeDrive implements DriveClient {
     if (file) file.name = name;
   }
 
+  /** Signed-in account reported by aboutUser (simulates Drive). */
+  aboutEmail = "fake@example.com";
+
+  async aboutUser(): Promise<{ emailAddress: string }> {
+    this.calls.push("aboutUser()");
+    return { emailAddress: this.aboutEmail };
+  }
+
   async get(fileId: string): Promise<DriveFile> {
     this.calls.push(`get(${fileId})`);
     if (this.missing.has(fileId)) {

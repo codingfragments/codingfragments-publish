@@ -18,7 +18,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { AuthError, clientHash, resolveCredentials, tokenPath } from "../core/auth.ts";
+import {
+  AuthError,
+  clientHash,
+  explainCredentials,
+  inspectToken,
+  resolveCredentials,
+  tokenPath,
+  writeToken,
+} from "../core/auth.ts";
 
 let tmp: string;
 let home: string;
@@ -85,6 +93,40 @@ test("explicit secret-file path wins over rclone", () => {
   const creds = resolveCredentials({ GDRIVE_PUBLISH_CLIENT_SECRET_FILE: file });
   assert.equal(creds.clientId, "file-id");
   assert.match(creds.source, /^file /);
+});
+
+test("GOOGLE_OAUTH_CREDENTIALS is honoured like the secret-file env var", () => {
+  const file = clientSecretFile(tmp, "alias-id", "GOCSPX-alias");
+  stubRclone({ r1: { type: "drive", client_id: "rclone-id", client_secret: "GOCSPX-rclone" } });
+  const creds = resolveCredentials({ GOOGLE_OAUTH_CREDENTIALS: file });
+  assert.equal(creds.clientId, "alias-id");
+  assert.match(creds.source, /^file /);
+});
+
+test("GDRIVE_PUBLISH_CLIENT_SECRET_FILE wins over the GOOGLE_OAUTH_CREDENTIALS alias", () => {
+  const specific = path.join(tmp, "specific-secret.json");
+  fs.writeFileSync(
+    specific,
+    JSON.stringify({ installed: { client_id: "specific-id", client_secret: "GOCSPX-specific" } }),
+  );
+  const alias = path.join(tmp, "alias-secret.json");
+  fs.writeFileSync(
+    alias,
+    JSON.stringify({ installed: { client_id: "alias-id", client_secret: "GOCSPX-alias" } }),
+  );
+  const creds = resolveCredentials({
+    GDRIVE_PUBLISH_CLIENT_SECRET_FILE: specific,
+    GOOGLE_OAUTH_CREDENTIALS: alias,
+  });
+  assert.equal(creds.clientId, "specific-id");
+});
+
+test("a malformed GOOGLE_OAUTH_CREDENTIALS file falls through to the next source", () => {
+  const p = path.join(tmp, "broken-alias.json");
+  fs.writeFileSync(p, "{ not json");
+  stubRclone({ r1: { type: "drive", client_id: "rclone-id", client_secret: "GOCSPX-rclone" } });
+  const creds = resolveCredentials({ GOOGLE_OAUTH_CREDENTIALS: p });
+  assert.equal(creds.clientId, "rclone-id");
 });
 
 test("a `web` shaped client_secret.json is also accepted", () => {
@@ -192,4 +234,122 @@ test("token paths are keyed by client_id hash, not shared", () => {
   assert.equal(clientHash("client-a.apps.googleusercontent.com").length, 8);
   // stable across calls
   assert.equal(tokenPath("client-a.apps.googleusercontent.com"), a);
+});
+
+// ---------------------------------------------------------------------------
+// explainCredentials: the visible chain behind resolveCredentials
+// ---------------------------------------------------------------------------
+
+test("explainCredentials marks the env pair chosen and later steps not evaluated", () => {
+  const explanation = explainCredentials({
+    GDRIVE_PUBLISH_CLIENT_ID: "id",
+    GDRIVE_PUBLISH_CLIENT_SECRET: "secret",
+  });
+  assert.equal(explanation.creds?.source, "env pair");
+  const envStep = explanation.steps.find((s) => s.label.includes("CLIENT_ID"));
+  assert.equal(envStep?.state, "chosen");
+  const rclone = explanation.steps.find((s) => s.label.startsWith("rclone"));
+  assert.equal(rclone?.state, "absent");
+  assert.match(rclone?.note ?? "", /not evaluated/);
+});
+
+test("explainCredentials shows a set-but-skipped alias with a reason", () => {
+  const specific = clientSecretFile(tmp, "file-id", "GOCSPX-file");
+  const alias = path.join(tmp, "alias-secret.json");
+  fs.writeFileSync(
+    alias,
+    JSON.stringify({ installed: { client_id: "alias-id", client_secret: "s" } }),
+  );
+  const explanation = explainCredentials({
+    GDRIVE_PUBLISH_CLIENT_SECRET_FILE: specific,
+    GOOGLE_OAUTH_CREDENTIALS: alias,
+  });
+  assert.equal(explanation.creds?.clientId, "file-id");
+  const aliasStep = explanation.steps.find((s) => s.label.includes("alias"));
+  assert.equal(aliasStep?.state, "set");
+  assert.equal(aliasStep?.indented, true);
+  assert.match(aliasStep?.note ?? "", /not used/);
+});
+
+test("explainCredentials flags an invalid secret file as skipped, not absent", () => {
+  const broken = path.join(tmp, "broken.json");
+  fs.writeFileSync(broken, "{ not json");
+  const explanation = explainCredentials({ GDRIVE_PUBLISH_CLIENT_SECRET_FILE: broken });
+  const step = explanation.steps.find((s) => s.label === "GDRIVE_PUBLISH_CLIENT_SECRET_FILE");
+  assert.equal(step?.state, "set");
+  assert.match(step?.note ?? "", /not a valid client_secret\.json/);
+  assert.equal(explanation.creds, null);
+});
+
+test("explainCredentials shows a set env var pointing at a missing file", () => {
+  const explanation = explainCredentials({ GOOGLE_OAUTH_CREDENTIALS: path.join(tmp, "nope.json") });
+  const step = explanation.steps.find((s) => s.label.includes("alias"));
+  assert.equal(step?.state, "set");
+  assert.match(step?.note ?? "", /no such file/);
+  assert.equal(explanation.creds, null);
+});
+
+test("explainCredentials reports rclone ambiguity as an error step, never a throw", () => {
+  stubRclone({
+    a: { type: "drive", client_id: "1", client_secret: "GOCSPX-1" },
+    b: { type: "drive", client_id: "2", client_secret: "GOCSPX-2" },
+  });
+  const explanation = explainCredentials({});
+  assert.equal(explanation.creds, null);
+  assert.ok(explanation.error, "resolution error message present");
+  const rclone = explanation.steps.find((s) => s.label.startsWith("rclone"));
+  assert.equal(rclone?.state, "error");
+  assert.match(rclone?.note ?? "", /ambiguous/);
+});
+
+test("explainCredentials agrees with resolveCredentials on the winner", () => {
+  const file = clientSecretFile(tmp, "file-id", "GOCSPX-file");
+  stubRclone({ r1: { type: "drive", client_id: "rclone-id", client_secret: "GOCSPX-rclone" } });
+  for (const env of [
+    { GDRIVE_PUBLISH_CLIENT_ID: "id", GDRIVE_PUBLISH_CLIENT_SECRET: "secret" },
+    { GDRIVE_PUBLISH_CLIENT_SECRET_FILE: file },
+    { GOOGLE_OAUTH_CREDENTIALS: file },
+    {},
+  ]) {
+    assert.equal(
+      explainCredentials(env).creds?.clientId ?? null,
+      resolveCredentials(env).clientId,
+      `chain and resolver must agree for ${JSON.stringify(Object.keys(env))}`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// inspectToken: cached-token state without leaking values
+// ---------------------------------------------------------------------------
+
+test("inspectToken reports state and never the token values", () => {
+  writeToken({
+    clientHash: clientHash("client-x"),
+    access_token: "SEKRIT-ACCESS",
+    refresh_token: "SEKRIT-REFRESH",
+    expires_at: Date.now() + 60 * 60 * 1000,
+  });
+  const state = inspectToken("client-x");
+  assert.ok(state, "token state exists");
+  assert.equal(state.expired, false);
+  assert.equal(state.hasRefreshToken, true);
+  assert.equal(state.path, tokenPath("client-x"));
+  const serialised = JSON.stringify(state);
+  assert.ok(!serialised.includes("SEKRIT"), "token values must not leak");
+});
+
+test("inspectToken reports an expired access token as expired", () => {
+  writeToken({
+    clientHash: clientHash("client-y"),
+    access_token: "SEKRIT-ACCESS",
+    expires_at: Date.now() - 1000,
+  });
+  const state = inspectToken("client-y");
+  assert.equal(state?.expired, true);
+  assert.equal(state?.hasRefreshToken, false, "no refresh token was cached");
+});
+
+test("inspectToken returns null when nothing is cached", () => {
+  assert.equal(inspectToken("client-z"), null);
 });

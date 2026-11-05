@@ -47,6 +47,7 @@ const TOUCHED_ENV = [
   "GDRIVE_PUBLISH_CLIENT_ID",
   "GDRIVE_PUBLISH_CLIENT_SECRET",
   "GDRIVE_PUBLISH_CLIENT_SECRET_FILE",
+  "GOOGLE_OAUTH_CREDENTIALS",
   "GDRIVE_PUBLISH_RCLONE_REMOTE",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
@@ -119,6 +120,10 @@ test("manifest present but no credentials/token: still NOT registered", async ()
   delete process.env.GDRIVE_PUBLISH_CLIENT_ID;
   // biome-ignore lint/performance/noDelete: intentional env removal
   delete process.env.GDRIVE_PUBLISH_CLIENT_SECRET;
+  // biome-ignore lint/performance/noDelete: intentional env removal
+  delete process.env.GDRIVE_PUBLISH_CLIENT_SECRET_FILE;
+  // biome-ignore lint/performance/noDelete: intentional env removal
+  delete process.env.GOOGLE_OAUTH_CREDENTIALS;
   const loaded = await load(workspace);
   assert.deepEqual(
     loaded.tools.map((t) => t.name),

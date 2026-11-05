@@ -89,14 +89,14 @@ ships compiled JS in `dist/` while the TypeScript sources stay for pi and
 monorepo use):
 
 ```bash
-npx gdrive-publish login      # zero-install, one-time browser consent
+npx gdrive-publish auth login  # zero-install, one-time browser consent
 npm i -g gdrive-publish       # or install once; scope: drive.file
 ```
 
 Run straight from the monorepo without any install:
 
 ```bash
-node extensions/gdrive-publish/cli.ts login
+node extensions/gdrive-publish/cli.ts auth login
 ```
 
 Installing it as a pi package (`pi install npm:gdrive-publish`) registers the
@@ -128,7 +128,7 @@ gdrive-publish help              # overview
 gdrive-publish help publish      # flags, examples, exit codes for one command
 ```
 
-Every command except `login` is fully non-interactive and scriptable from CI
+Every command except `auth login` is fully non-interactive and scriptable from CI
 and git hooks. The task-oriented guide (first publish, day-two workflows,
 troubleshooting) is the [manual](MANUAL.md).
 

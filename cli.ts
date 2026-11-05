@@ -2,7 +2,7 @@
 /**
  * gdrive-publish CLI.
  *
- * Fully non-interactive except for `login`: every other command works headless
+ * Fully non-interactive except for `auth login`: every other command works headless
  * with flags, `--json`, and meaningful exit codes, so the same binary is usable
  * from CI, git hooks, and the pi extension.
  *
@@ -32,6 +32,8 @@ import {
   CachedTokenProvider,
   clientHash,
   consent,
+  explainCredentials,
+  inspectToken,
   resolveCredentials,
   writeToken,
 } from "./core/auth.ts";
@@ -78,12 +80,16 @@ function resolveRoot(target: string | undefined): string {
   return root;
 }
 
-function credentialsOrFail(args: Args): ReturnType<typeof resolveCredentials> {
+function authEnv(args: Args): NodeJS.ProcessEnv {
   const env = { ...process.env };
   const remote = args.options.get("remote");
   if (remote) env.GDRIVE_PUBLISH_RCLONE_REMOTE = remote;
+  return env;
+}
+
+function credentialsOrFail(args: Args): ReturnType<typeof resolveCredentials> {
   try {
-    return resolveCredentials(env);
+    return resolveCredentials(authEnv(args));
   } catch (e) {
     if (e instanceof AuthError) fail(1, e.message);
     throw e;
@@ -136,6 +142,125 @@ async function cmdLogin(args: Args): Promise<void> {
   });
   const p = writeToken(token);
   process.stdout.write(`authorised; token cached at ${p}\n`);
+}
+
+interface VerifyReport {
+  account?: string;
+  error?: string;
+  manifest?: { dir: string; folderVisible?: boolean; identityMatches?: boolean };
+}
+
+/**
+ * `auth status`: the full credential chain and token state, offline by
+ * default. Reports by name/path/hash, never a secret value. Never fails on
+ * resolution errors - the whole point is to explain them - but exits 1 when
+ * the result is "not authenticated" so scripts can gate on it.
+ */
+async function cmdAuthStatus(args: Args): Promise<void> {
+  const json = args.flags.has("json");
+  const explanation = explainCredentials(authEnv(args));
+  const creds = explanation.creds;
+  const hash = creds ? clientHash(creds.clientId) : null;
+  const token = creds ? inspectToken(creds.clientId) : null;
+
+  let verify: VerifyReport = {};
+  if (args.flags.has("verify")) {
+    if (!creds || !token) {
+      verify = { error: "nothing to verify: no resolvable client or no cached token" };
+    } else {
+      const drive = new RestDriveClient(new CachedTokenProvider(creds));
+      try {
+        verify = { account: (await drive.aboutUser()).emailAddress };
+        // Inside a publish root, also prove the folder is visible to THIS
+        // client (drive.file is per-client) and the identity still matches.
+        const discovery = discoverManifestRoot(process.cwd());
+        if (discovery.manifest) {
+          const manifestHash = discovery.manifest.clientIdHash ?? null;
+          const manifestReport: VerifyReport["manifest"] = { dir: discovery.root };
+          try {
+            await drive.get(discovery.manifest.rootFolderId);
+            manifestReport.folderVisible = true;
+          } catch {
+            manifestReport.folderVisible = false;
+          }
+          if (manifestHash !== null) manifestReport.identityMatches = manifestHash === hash;
+          verify.manifest = manifestReport;
+        }
+      } catch (e) {
+        verify = { error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+  }
+
+  const authenticated = creds !== null && token !== null && verify.error === undefined;
+
+  if (json) {
+    const payload = {
+      authenticated,
+      credentials: creds ? { source: creds.source, clientIdHash: hash } : null,
+      chain: explanation.steps,
+      ...(explanation.error ? { resolutionError: explanation.error } : {}),
+      token,
+      ...(args.flags.has("verify") ? { verify } : {}),
+    };
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    process.stdout.write("credential chain (first match wins):\n");
+    // One column width across all steps keeps the states aligned; the
+    // numbered and indented rows share the same 5-char prefix.
+    const width = Math.max(46, ...explanation.steps.map((s) => s.label.length + 3));
+    let n = 0;
+    for (const step of explanation.steps) {
+      const row = `${step.label.padEnd(width)}${renderChainStep(step)}`;
+      if (step.indented) {
+        process.stdout.write(`     ${row}\n`);
+      } else {
+        n++;
+        process.stdout.write(`  ${n}. ${row}\n`);
+      }
+    }
+    if (explanation.error) process.stdout.write(`resolution failed: ${explanation.error}\n`);
+    process.stdout.write("\n");
+    if (creds) {
+      process.stdout.write(`source:  ${creds.source}\n`);
+      process.stdout.write(`client:  ${hash} (sha256(client_id)[0:8])\n`);
+      if (token) {
+        process.stdout.write(`token:   ${token.path}\n`);
+        const expiry = token.expired
+          ? `expired ${fmtDuration(Date.now() - token.expiresAt)} ago`
+          : `expires in ${fmtDuration(token.expiresAt - Date.now())}`;
+        process.stdout.write(`  access token:   ${expiry}\n`);
+        process.stdout.write(`  refresh token:  ${token.hasRefreshToken ? "present" : "absent"}\n`);
+      } else {
+        process.stdout.write("token:   none cached for this client\n");
+      }
+    } else {
+      process.stdout.write("source:  none resolvable\n");
+    }
+    if (verify.account) process.stdout.write(`account: ${verify.account}\n`);
+    if (verify.manifest) {
+      const m = verify.manifest;
+      const parts: string[] = [];
+      if (m.folderVisible !== undefined) {
+        parts.push(m.folderVisible ? "folder visible" : "folder NOT visible");
+      }
+      if (m.identityMatches !== undefined) {
+        parts.push(m.identityMatches ? "client matches manifest" : "client CHANGED since init");
+      }
+      if (parts.length) process.stdout.write(`manifest (${m.dir}): ${parts.join("; ")}\n`);
+    }
+    if (verify.error) process.stdout.write(`verify:  ${verify.error}\n`);
+    process.stdout.write(`\nauthenticated: ${authenticated ? "yes" : "no"}\n`);
+  }
+
+  if (!authenticated) process.exitCode = 1;
+}
+
+function renderChainStep(step: { state: string; note?: string }): string {
+  if (step.note === undefined) return step.state;
+  // An absent step with a note is explained by the note alone ("not evaluated…").
+  if (step.state === "absent") return step.note as string;
+  return `${step.state} -> ${step.note}`;
 }
 
 async function cmdInit(args: Args): Promise<void> {
@@ -660,8 +785,11 @@ async function main(): Promise<void> {
     };
 
     switch (commandSpec.name) {
-      case "login":
+      case "auth login":
         await cmdLogin(args);
+        break;
+      case "auth status":
+        await cmdAuthStatus(args);
         break;
       case "init":
         await cmdInit(args);

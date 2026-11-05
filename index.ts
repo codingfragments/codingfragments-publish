@@ -104,7 +104,7 @@ export default function (pi: ExtensionAPI) {
         const creds = resolveCredentials();
         if (!readToken(creds.clientId)) {
           ctx.ui.notify(
-            `not authenticated for ${creds.source} - run "gdrive-publish login" in a terminal first`,
+            `not authenticated for ${creds.source} - run "gdrive-publish auth login" in a terminal first`,
             "error",
           );
           return;

@@ -21,7 +21,7 @@ The `gdrive_publish` tool only exists when the project is set up. If you cannot
 see it:
 
 1. Run `/gdrive-publish-status` to see what is missing.
-2. Missing auth → the user must run `gdrive-publish login` in a **terminal**
+2. Missing auth → the user must run `gdrive-publish auth login` in a **terminal**
    (it opens a browser; never try to do this through a tool call).
 3. Missing manifest → `/gdrive-publish-init <folder name>` creates the Drive
    folder and `.gdrive-manifest.json`, then `/reload` registers the tool.

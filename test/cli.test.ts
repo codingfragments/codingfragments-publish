@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { clientHash } from "../core/auth.ts";
 import * as manifestIo from "../core/manifest.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "cli.ts");
@@ -71,7 +72,7 @@ function seedManifest(): void {
 test("help exits 0 and documents every command", () => {
   const { status, stdout } = run(["help"]);
   assert.equal(status, 0);
-  for (const cmd of ["login", "init", "plan", "publish", "status"]) {
+  for (const cmd of ["auth login", "auth status", "init", "plan", "publish", "status"]) {
     assert.match(stdout, new RegExp(`\\b${cmd}\\b`), `usage should mention ${cmd}`);
   }
 });
@@ -227,7 +228,7 @@ test("init inside an existing tree is refused without --force (nested roots)", (
   const forced = run(["init", path.join(tmp, "guide"), "--name", "Deliberate", "--force"]);
   assert.doesNotMatch(forced.stderr, /nest publish roots/, "--force overrides the guard");
   // proceeding past the guard reaches the auth stage (offline: no token in HOME)
-  assert.match(forced.stderr, /not authenticated|gdrive-publish login/);
+  assert.match(forced.stderr, /not authenticated|auth login/);
 });
 
 test("publish --dry-run writes nothing and never contacts Drive", () => {
@@ -281,13 +282,96 @@ test("status without a manifest says so instead of failing", () => {
   assert.match(stdout, /manifest: none/);
 });
 
+// ---------------------------------------------------------------------------
+// auth status (the `auth` command group)
+// ---------------------------------------------------------------------------
+
+function seedToken(clientId: string, expiresAt: number): void {
+  const dir = path.join(home, ".config", "gdrive-publish");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `token-${clientHash(clientId)}.json`),
+    JSON.stringify({
+      clientHash: clientHash(clientId),
+      access_token: "cached-access-token",
+      refresh_token: "cached-refresh-token",
+      expires_at: expiresAt,
+    }),
+  );
+}
+
+test("auth reports the chain and exits 1 without a cached token", () => {
+  const { status, stdout } = run(["auth"]);
+  assert.equal(status, 1);
+  assert.match(stdout, /credential chain \(first match wins\):/);
+  assert.match(stdout, /GDRIVE_PUBLISH_CLIENT_ID \+ _CLIENT_SECRET\s+chosen/);
+  assert.match(stdout, /GOOGLE_OAUTH_CREDENTIALS \(alias\)\s+absent/);
+  assert.match(stdout, /source:\s+env pair/);
+  assert.match(stdout, /token:\s+none cached for this client/);
+  assert.match(stdout, /authenticated: no/);
+});
+
+test("auth exits 0 with a cached token and reports its state", () => {
+  seedToken("test-client-id", Date.now() + 60 * 60 * 1000);
+  const { status, stdout } = run(["auth"]);
+  assert.equal(status, 0);
+  assert.match(stdout, /authenticated: yes/);
+  assert.match(stdout, /access token:\s+expires in/);
+  assert.match(stdout, /refresh token:\s+present/);
+});
+
+test("auth status (spelled out) is the same command as bare auth", () => {
+  const bare = run(["auth"]);
+  const spelled = run(["auth", "status"]);
+  assert.equal(spelled.status, bare.status);
+  assert.equal(spelled.stdout, bare.stdout);
+});
+
+test("auth --json is parseable and carries the whole chain", () => {
+  const { status, stdout } = run(["auth", "--json"]);
+  assert.equal(status, 1);
+  const parsed = JSON.parse(stdout) as {
+    authenticated: boolean;
+    credentials: { source: string; clientIdHash: string } | null;
+    chain: { label: string; state: string; note?: string }[];
+    token: { path: string } | null;
+  };
+  assert.equal(parsed.authenticated, false);
+  assert.equal(parsed.credentials?.source, "env pair");
+  assert.match(parsed.credentials?.clientIdHash ?? "", /^[0-9a-f]{8}$/);
+  assert.equal(parsed.chain.find((s) => s.label.includes("CLIENT_ID"))?.state, "chosen");
+  assert.equal(parsed.chain.find((s) => s.label.includes("rclone"))?.state, "absent");
+  assert.equal(parsed.token, null);
+});
+
+test("the old `login` name is a usage error pointing at auth login", () => {
+  const { status, stderr } = run(["login"]);
+  assert.equal(status, 2);
+  assert.match(stderr, /unknown command: login/);
+  assert.match(stderr, /did you mean "auth login"\?/);
+});
+
+test("an auth subcommand typo is rejected with a suggestion, not misparsed", () => {
+  const { status, stderr } = run(["auth", "logn"]);
+  assert.equal(status, 2);
+  assert.match(stderr, /unknown command: auth logn/);
+  assert.match(stderr, /did you mean "auth login"\?/);
+});
+
+test("auth login --help renders help and never starts the consent flow", () => {
+  const { status, stdout } = run(["auth", "login", "--help"]);
+  assert.equal(status, 0);
+  assert.match(stdout, /auth login/);
+  assert.doesNotMatch(stdout, /opening a browser/);
+});
+
 test("publish fails cleanly when not authenticated (no token for this client)", () => {
   // HOME is a fresh temp dir, so no cached token exists for the env client.
   write("a.md", "# A\n");
   seedManifest();
   const { status, stderr } = run(["publish", tmp]);
   assert.equal(status, 1);
-  assert.match(stderr, /not authenticated|gdrive-publish login/);
+  assert.match(stderr, /not authenticated|auth login/);
 });
 
 test("plan suggests --suggest-config when unsupported files exist", () => {

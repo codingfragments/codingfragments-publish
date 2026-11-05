@@ -33,7 +33,7 @@ It is **not** needed for reading Drive or anything unrelated to publishing.
 
 1. **Check readiness** — the `gdrive_publish` tool exists only when the project
    is configured (a `.gdrive-manifest.json` and a cached token). If missing,
-   the agent will tell you to run `gdrive-publish login` in a terminal (only
+   the agent will tell you to run `gdrive-publish auth login` in a terminal (only
    you can do the browser consent) and then `/gdrive-publish-init <name>`.
 2. **Plan first** — it calls the tool with `mode: "plan"`, which is read-only,
    and shows you the outcome, including warnings.
@@ -51,7 +51,7 @@ say so explicitly — the rails are there because the failure modes are silent.
 |---|---|---|
 | Never `prune: true` unless you asked | Pruning moves Drive files to trash | Say "prune the deleted files too" |
 | Never `assumeYes: true` without your approval | Publishing is a write to your Drive | Say "yes, publish it" after seeing the plan |
-| Never runs `login` through a tool call | OAuth needs your browser and your token file | Run `gdrive-publish login` yourself |
+| Never runs `auth login` through a tool call | OAuth needs your browser and your token file | Run `gdrive-publish auth login` yourself |
 | Plan before publish | A bad plan is cheap; a bad publish is not | Generally don't |
 
 The extension enforces the second rail independently: in a non-interactive

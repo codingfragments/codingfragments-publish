@@ -4,7 +4,7 @@
  * Resolution chain, first match wins, source reported by NAME and never by
  * value:
  *   1. GDRIVE_PUBLISH_CLIENT_ID + GDRIVE_PUBLISH_CLIENT_SECRET
- *   2. GDRIVE_PUBLISH_CLIENT_SECRET_FILE
+ *   2. GDRIVE_PUBLISH_CLIENT_SECRET_FILE (alias: GOOGLE_OAUTH_CREDENTIALS)
  *   3. ~/.config/gdrive-publish/client_secret.json
  *   4. rclone drive remote (GDRIVE_PUBLISH_RCLONE_REMOTE, or the only one)
  *
@@ -49,6 +49,12 @@ export class AuthError extends Error {}
 
 export function clientHash(clientId: string): string {
   return crypto.createHash("sha256").update(clientId).digest("hex").slice(0, 8);
+}
+
+/** ~/.config/... instead of /Users/<name>/... - display only, shorter chains. */
+function abbreviatedHome(p: string): string {
+  const homeDir = os.homedir();
+  return homeDir && p.startsWith(homeDir) ? `~${p.slice(homeDir.length)}` : p;
 }
 
 export function tokenPath(clientId: string): string {
@@ -100,7 +106,7 @@ function fromRclone(wanted?: string): Credentials {
     }
   } else if (candidates.length === 0) {
     throw new AuthError(
-      `no credential source found. Provide GDRIVE_PUBLISH_CLIENT_ID + GDRIVE_PUBLISH_CLIENT_SECRET, GDRIVE_PUBLISH_CLIENT_SECRET_FILE, ${path.join(configDir(), "client_secret.json")}, or an rclone drive remote.`,
+      `no credential source found. Provide GDRIVE_PUBLISH_CLIENT_ID + GDRIVE_PUBLISH_CLIENT_SECRET, GDRIVE_PUBLISH_CLIENT_SECRET_FILE (or its GOOGLE_OAUTH_CREDENTIALS alias), ${path.join(configDir(), "client_secret.json")}, or an rclone drive remote.`,
     );
   } else if (candidates.length > 1) {
     throw new AuthError(
@@ -136,6 +142,8 @@ export function resolveCredentials(env: NodeJS.ProcessEnv = process.env): Creden
   if (id && secret) return { source: "env pair", clientId: id, clientSecret: secret };
   const candidates: string[] = [];
   if (env.GDRIVE_PUBLISH_CLIENT_SECRET_FILE) candidates.push(env.GDRIVE_PUBLISH_CLIENT_SECRET_FILE);
+  // Alias honoured by other Google tooling; the project-specific name wins.
+  if (env.GOOGLE_OAUTH_CREDENTIALS) candidates.push(env.GOOGLE_OAUTH_CREDENTIALS);
   candidates.push(path.join(configDir(), "client_secret.json"));
   for (const p of candidates) {
     if (fs.existsSync(p)) {
@@ -144,6 +152,134 @@ export function resolveCredentials(env: NodeJS.ProcessEnv = process.env): Creden
     }
   }
   return fromRclone(env.GDRIVE_PUBLISH_RCLONE_REMOTE);
+}
+
+/** State of a chain step in an {@link AuthExplanation}: what happened to this candidate. */
+export type ChainState = "chosen" | "set" | "absent" | "error";
+
+export interface ChainStep {
+  /** Candidate name, safe to print (never a secret value). */
+  label: string;
+  state: ChainState;
+  /** Display detail: a file path, remote names, or why it was skipped. */
+  note?: string;
+  /** Render indented under the previous step (the GOOGLE_OAUTH_CREDENTIALS alias). */
+  indented?: boolean;
+}
+
+export interface AuthExplanation {
+  steps: ChainStep[];
+  /** The winning credentials, or null when nothing resolved. */
+  creds: Credentials | null;
+  /** Why resolution failed, when it did (the AuthError message). */
+  error?: string;
+}
+
+/**
+ * Walk the same chain as resolveCredentials, but report every candidate:
+ * which source won, which were set but skipped and why, and where resolution
+ * failed. Names, paths and hashes only - never a secret value. Steps after the
+ * winner are shown as set/absent without being evaluated (first match wins),
+ * except the cheap file-existence checks, which stay honest about being set.
+ */
+export function explainCredentials(env: NodeJS.ProcessEnv = process.env): AuthExplanation {
+  const steps: ChainStep[] = [];
+  let creds: Credentials | null = null;
+
+  const id = env.GDRIVE_PUBLISH_CLIENT_ID;
+  const secret = env.GDRIVE_PUBLISH_CLIENT_SECRET;
+  if (id && secret) {
+    creds = { source: "env pair", clientId: id, clientSecret: secret };
+    steps.push({ label: "GDRIVE_PUBLISH_CLIENT_ID + _CLIENT_SECRET", state: "chosen" });
+  } else {
+    steps.push({ label: "GDRIVE_PUBLISH_CLIENT_ID + _CLIENT_SECRET", state: "absent" });
+  }
+
+  const fileCandidates: { label: string; path: string | undefined; alias?: boolean }[] = [
+    { label: "GDRIVE_PUBLISH_CLIENT_SECRET_FILE", path: env.GDRIVE_PUBLISH_CLIENT_SECRET_FILE },
+    {
+      label: "GOOGLE_OAUTH_CREDENTIALS (alias)",
+      path: env.GOOGLE_OAUTH_CREDENTIALS,
+      alias: true,
+    },
+    {
+      label: abbreviatedHome(path.join(configDir(), "client_secret.json")),
+      path: path.join(configDir(), "client_secret.json"),
+    },
+  ];
+  for (const candidate of fileCandidates) {
+    const step: ChainStep = {
+      label: candidate.label,
+      state: "absent",
+      ...(candidate.alias ? { indented: true } : {}),
+    };
+    const set = candidate.path !== undefined && candidate.path !== "";
+    if (creds) {
+      if (set && fs.existsSync(candidate.path as string)) {
+        step.state = "set";
+        step.note = `${candidate.path} (not used: a higher-priority source won)`;
+      }
+    } else if (set) {
+      const candidatePath = candidate.path as string;
+      const fromFile = fs.existsSync(candidatePath) ? fromSecretFile(candidatePath) : null;
+      if (fromFile) {
+        creds = fromFile;
+        step.state = "chosen";
+        step.note = candidatePath;
+      } else if (fs.existsSync(candidatePath)) {
+        step.state = "set";
+        step.note = `${candidatePath} exists but is not a valid client_secret.json - skipped`;
+      } else {
+        step.state = "set";
+        step.note = `${candidatePath} (no such file - skipped)`;
+      }
+    }
+    steps.push(step);
+  }
+
+  const rclone: ChainStep = {
+    label: "rclone drive remote (GDRIVE_PUBLISH_RCLONE_REMOTE)",
+    state: "absent",
+  };
+  if (creds) {
+    rclone.note = "not evaluated (a higher-priority source won)";
+  } else {
+    try {
+      creds = fromRclone(env.GDRIVE_PUBLISH_RCLONE_REMOTE);
+      rclone.state = "chosen";
+      rclone.note = creds.source;
+    } catch (e) {
+      const message = e instanceof AuthError ? e.message : String(e);
+      rclone.state = "error";
+      // The chain row carries the first sentence; the full message is
+      // reported once, as the resolution error after the chain.
+      rclone.note = message.split(/\. | - /)[0] ?? message;
+      steps.push(rclone);
+      return { steps, creds: null, error: message };
+    }
+  }
+  steps.push(rclone);
+  return { steps, creds };
+}
+
+/** Read-only state of the cached token for a client; never the token values. */
+export interface TokenState {
+  path: string;
+  /** Epoch ms when the cached access token expires. */
+  expiresAt: number;
+  hasRefreshToken: boolean;
+  expired: boolean;
+}
+
+export function inspectToken(clientId: string): TokenState | null {
+  const token = readToken(clientId);
+  if (!token) return null;
+  return {
+    path: tokenPath(clientId),
+    expiresAt: token.expires_at,
+    hasRefreshToken: token.refresh_token !== undefined && token.refresh_token !== "",
+    expired: Date.now() >= token.expires_at,
+  };
 }
 
 async function postForm(params: Record<string, string>): Promise<{
@@ -250,8 +386,8 @@ export async function consent(
 
 /**
  * Non-interactive token provider: uses the cached token, refreshing it when
- * expired. Never prompts - `login` is the only interactive entry point, which
- * keeps every other command usable headless (decision 6).
+ * expired. Never prompts - `auth login` is the only interactive entry point,
+ * which keeps every other command usable headless (decision 6).
  */
 export class CachedTokenProvider {
   private readonly creds: Credentials;
@@ -274,7 +410,7 @@ export class CachedTokenProvider {
       throw new AuthError(
         `not authenticated for ${this.creds.source} (client ${clientHash(
           this.creds.clientId,
-        )}). Run: gdrive-publish login`,
+        )}). Run: gdrive-publish auth login`,
       );
     }
     const t = await postForm({
