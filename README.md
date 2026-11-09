@@ -277,7 +277,7 @@ Nothing is ever hard-deleted; `--prune` uses trash.
 ## Tests
 
 ```bash
-npm test          # 118 tests, offline, no credentials, ~2s
+npm test          # 299 tests, offline, no credentials, ~2 min
 npm run typecheck # 0 errors
 npm run lint      # biome
 ```
@@ -290,11 +290,11 @@ executed through Node's native type stripping - there is no build step.
 |---|---|---|
 | `links.test.ts` | 10 | link/image parsing; never rewriting inside fenced blocks or inline code spans |
 | `csv-naming.test.ts` | 12 | encoding/delimiter sniffing, quoting, front matter, Doc naming |
-| `scan-prepare.test.ts` | 20 | file classification, ignore rules, path-escape refusal, image inlining, size caps, plan-time analysis mode |
-| `auth.test.ts` | 13 | credential-chain precedence, the `GOCSPX-`/`rclone reveal` rule, per-client token keying |
-| `drive-manifest-report.test.ts` | 18 | exact REST request shapes, error-reason parsing, atomic/sorted manifest IO, report rendering |
-| `publish.test.ts` | 17 | two-phase ordering, update-in-place, crash recovery, orphan safety, trash-not-delete, diagnostic dedupe |
-| `cli.test.ts` | 18 | exit-code contract (0/1/2/3), `--json` shape, dry-run purity, plan/publish diagnostic parity, secrets never printed |
+| `scan-prepare.test.ts` | 31 | file classification, ignore rules, path-escape refusal, image inlining, size caps, plan-time analysis mode |
+| `auth.test.ts` | 25 | credential-chain precedence (incl. the `GOOGLE_OAUTH_CREDENTIALS` alias), chain explanation, token state, the `GOCSPX-`/`rclone reveal` rule, per-client token keying |
+| `drive-manifest-report.test.ts` | 19 | exact REST request shapes, error-reason parsing, atomic/sorted manifest IO, report rendering |
+| `publish.test.ts` | 43 | two-phase ordering, update-in-place, crash recovery, orphan safety, trash-not-delete, diagnostic dedupe |
+| `cli.test.ts` | 50 | exit-code contract (0/1/2/3), `--json` shape, dry-run purity, plan/publish diagnostic parity, secrets never printed |
 | `native-mode.test.ts` | 25 | mode config plumbing, MODE_MISMATCH guard, native publish behaviour (raw shells, kept anchors, no inlining) |
 | `extension.test.ts` | 10 | the tool is registered only in configured projects; writes are confirm-gated |
 

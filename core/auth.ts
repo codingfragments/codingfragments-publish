@@ -316,7 +316,7 @@ export function writeToken(token: StoredToken): string {
   return p;
 }
 
-/** Interactive loopback consent. Only ever called by `login`. */
+/** Interactive loopback consent. Only ever called by `auth login`. */
 export async function consent(
   creds: Credentials,
   openBrowser: (url: string) => void,
